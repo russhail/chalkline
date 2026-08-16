@@ -730,3 +730,82 @@ test('a profile carries the shape, and neither D time is ranked', async () => {
     assert.equal(c.rank, null, `${key} must not be ranked`);
   }
 });
+
+// --- what the scoreboard said before the point -------------------------------
+//
+// Yaka led from the first point, so every one of their defensive points came
+// while ahead and every one of Blueberries' offensive points came while behind.
+// That makes this fixture a clean check that the walk buckets both sides of the
+// same point independently.
+
+test('every point is bucketed for both sides, from each side of the scoreboard', async () => {
+  const rows = await teamStats(store);
+  const yaka = rows.find((r) => r.teamId === 1047);
+  const blue = rows.find((r) => r.teamId === 1104);
+
+  // P0 is the only point played level: 0-0 before anyone scored.
+  assert.equal(yaka.scoreState.level.oPoints, 1);
+  assert.equal(yaka.scoreState.level.holds, 1);
+  assert.equal(blue.scoreState.level.dPoints, 1);
+
+  // Yaka were ahead for everything after it.
+  assert.equal(yaka.scoreState.ahead.dPoints, 5);
+  assert.equal(yaka.scoreState.ahead.breaks, 2);
+  assert.equal(yaka.scoreState.ahead.breakPct, 40);
+  assert.equal(yaka.scoreState.ahead.oPoints, 2);
+  assert.equal(yaka.scoreState.ahead.holdPct, 100);
+  assert.equal(yaka.scoreState.behind.oPoints, 0);
+
+  // The same points, seen from the other end.
+  assert.equal(blue.scoreState.behind.oPoints, 5);
+  assert.equal(blue.scoreState.behind.holds, 3);
+  assert.equal(blue.scoreState.behind.holdPct, 60);
+  assert.equal(blue.scoreState.behind.dPoints, 2);
+  assert.equal(blue.scoreState.ahead.dPoints, 0);
+});
+
+test('the three states account for every point and nothing twice', async () => {
+  const rows = await teamStats(store);
+  for (const t of rows) {
+    const st = t.scoreState;
+    assert.equal(st.behind.oPoints + st.level.oPoints + st.ahead.oPoints, t.oPoints,
+      `${t.name}: offensive points must partition across the three states`);
+    assert.equal(st.behind.dPoints + st.level.dPoints + st.ahead.dPoints, t.dPoints,
+      `${t.name}: defensive points must partition across the three states`);
+    assert.equal(st.behind.breaks + st.level.breaks + st.ahead.breaks, t.breaks);
+    assert.equal(st.behind.holds + st.level.holds + st.ahead.holds, t.holds);
+  }
+});
+
+test('a game that never reaches 12-12 contributes no tight points', async () => {
+  const rows = await teamStats(store);
+  // The fixture finishes 5-3, so nothing here is close-and-late.
+  assert.equal(rows.find((r) => r.teamId === 1047).tight.points, 0);
+  assert.equal(rows.find((r) => r.teamId === 1104).tight.pct, null,
+    'no tight points means no record, not a 0% record');
+});
+
+// --- connection depth --------------------------------------------------------
+
+test('connection depth counts distinct pairings, not goals', async () => {
+  const rows = await teamStats(store);
+  const yaka = rows.find((r) => r.teamId === 1047);
+  // Four assisted goals from three pairings — 2160 threw to 2149 twice.
+  assert.equal(yaka.assistedGoals, 4);
+  assert.equal(yaka.connections, 3);
+  assert.equal(yaka.connectionSpread, 75);
+
+  // Blueberries' three assisted goals came through three different pairings.
+  const blue = rows.find((r) => r.teamId === 1104);
+  assert.equal(blue.connections, 3);
+  assert.equal(blue.assistedGoals, 3);
+  assert.equal(blue.connectionSpread, 100);
+});
+
+test('the Callahan is absent from connection depth, having no thrower', async () => {
+  const rows = await teamStats(store);
+  const yaka = rows.find((r) => r.teamId === 1047);
+  // Five goals, four of them assisted.
+  assert.equal(yaka.reliance.goals.whole, 5);
+  assert.equal(yaka.assistedGoals, 4);
+});
