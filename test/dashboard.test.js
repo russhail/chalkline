@@ -4,7 +4,7 @@ import { createStore } from '../lib/store.js';
 import { handle } from '../lib/router.js';
 import { sync, syncGameDetail } from '../lib/sync.js';
 import { teamStats, playerLeaders, coverage, concentrationFor,
-         relianceFor, comboLeaders, teamProfile, median } from '../lib/dashboard.js';
+         relianceFor, comboLeaders, teamProfile, median, dShapeFor } from '../lib/dashboard.js';
 
 const NOW = Date.parse('2026-08-16T18:00:00Z');
 let store;
@@ -649,4 +649,78 @@ test('timeout conversion separates the break it won from the hold it kept', asyn
   // reported rather than silently folded into one side.
   assert.equal(yaka.timeoutsUnattributed, 0);
   assert.equal(blue.timeoutsUnattributed, 0);
+});
+
+// --- the shape of a defensive point, with tempo taken out --------------------
+//
+// The reason this exists rather than a raw side-by-side: across the whole
+// tournament both halves are dominated by how long a club's points run in
+// general, so raw seconds mostly rank clubs by tempo.
+
+test('two clubs with the same shape at different tempos come out identical', () => {
+  const fast = { dSecsPerPoint: 150, secondsPerBreak: 120, secondsPerConcededHold: 180,
+                 breakClockN: 8, concededClockN: 8 };
+  const slow = { dSecsPerPoint: 250, secondsPerBreak: 220, secondsPerConcededHold: 280,
+                 breakClockN: 8, concededClockN: 8 };
+  assert.equal(dShapeFor(fast, [fast]).gap, dShapeFor(slow, [slow]).gap);
+  // Their raw numbers are a hundred seconds apart, which is exactly what the
+  // uncentred columns would have sorted them on.
+  assert.equal(slow.secondsPerBreak - fast.secondsPerBreak, 100);
+});
+
+test('the shape carries its division median so the gap has a scale', () => {
+  const me = { dSecsPerPoint: 200, secondsPerBreak: 160, secondsPerConcededHold: 230,
+               breakClockN: 8, concededClockN: 9 };
+  const peers = [me,
+    { dSecsPerPoint: 300, secondsPerBreak: 290, secondsPerConcededHold: 310,
+      breakClockN: 8, concededClockN: 8 },
+    { dSecsPerPoint: 150, secondsPerBreak: 170, secondsPerConcededHold: 140,
+      breakClockN: 6, concededClockN: 7 }];
+  const d = dShapeFor(me, peers);
+  assert.equal(d.own, 200);
+  assert.equal(d.gap, 70);
+  assert.equal(d.thin, false);
+  // Gaps across the pool: +70, +20, -30. Median +20.
+  assert.equal(d.divisionMedianGap, 20);
+  assert.equal(d.divisionClubsCompared, 3);
+});
+
+test('peers short of the sample are left out of the benchmark, not counted as zero', () => {
+  const me = { dSecsPerPoint: 200, secondsPerBreak: 160, secondsPerConcededHold: 230,
+               breakClockN: 8, concededClockN: 9 };
+  const thinPeer = { dSecsPerPoint: 200, secondsPerBreak: 100, secondsPerConcededHold: 300,
+                     breakClockN: 1, concededClockN: 1 };
+  const d = dShapeFor(me, [me, thinPeer]);
+  assert.equal(d.divisionClubsCompared, 1, 'the one-point club contributes nothing');
+  assert.equal(d.divisionMedianGap, 70);
+});
+
+test('a club short of either half reports thin, and says which half', () => {
+  const me = { dSecsPerPoint: 200, secondsPerBreak: 160, secondsPerConcededHold: 230,
+               breakClockN: 2, concededClockN: 9 };
+  const d = dShapeFor(me, [me]);
+  assert.equal(d.thin, true);
+  assert.equal(d.gap, null);
+  assert.equal(d.own, null);
+  // The counts still travel, so the page can say what is missing rather than
+  // just refusing to draw.
+  assert.equal(d.breakN, 2);
+  assert.equal(d.concedeN, 9);
+});
+
+test('a club with nothing traceable has no shape at all', () => {
+  assert.equal(dShapeFor(null, []), null);
+});
+
+test('a profile carries the shape, and neither D time is ranked', async () => {
+  const p = await teamProfile(store, 1047);
+  assert.ok(p.dShape, 'the block is always present, even when thin');
+  assert.equal(p.dShape.thin, true, 'two breaks is not a sample');
+  // Neither time predicts break rate, so ranking them would imply a virtue
+  // the data does not support.
+  for (const key of ['secondsPerBreak', 'secondsPerConcededHold']) {
+    const c = p.context.find((x) => x.key === key);
+    assert.equal(c.neutral, true, `${key} must not be graded`);
+    assert.equal(c.rank, null, `${key} must not be ranked`);
+  }
 });
