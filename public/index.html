@@ -188,6 +188,16 @@ main{max-width:900px;margin:0 auto;padding:14px 12px 120px}
 .dsh .dkey i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;
   vertical-align:-1px}
 .dsh .dkey b{margin-left:auto;color:var(--text);font-weight:800}
+.rl-shape{position:relative;display:block;height:17px;margin:7px 0 5px}
+.rl-shape s{position:absolute;left:50%;top:-2px;bottom:-2px;width:2px;text-decoration:none;
+  background:var(--chalk);opacity:.5;transform:translateX(-1px)}
+.rl-shape i{position:absolute;height:6px;border-radius:99px}
+.rl-shape i.b{top:1px;background:var(--brk)}
+.rl-shape i.c{top:10px;background:var(--con)}
+.shapekey{display:flex;flex-wrap:wrap;gap:4px 14px;align-items:center;font-size:11px;
+  color:var(--dim);margin:0 4px 10px}
+.shapekey i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;
+  vertical-align:-1px}
 
 /* ---- slip ---- */
 #slip{position:fixed;left:0;right:0;bottom:0;z-index:50;background:var(--surface);
@@ -738,23 +748,15 @@ const STAT_VIEWS = [
     fmt: (t) => (t.oSecsPerPoint === null ? '—' : `${t.oSecsPerPoint}s`),
     sub: (t) => `${clock(t.oTime)} total on offence, over ${t.oClockN} points` },
 
-  { key: 'breaktime', label: 'Time to break',
-    note: 'When this defence scores, how long the point took. Not a verdict: across every club at this tournament, time to break has almost no relationship to how often a club breaks (r = -0.07). What it tracks instead is how long that club\'s points run in general (r = +0.65) — so this list is closer to a tempo ranking than a defensive one, and nothing here is coloured as good. It is still worth splitting out, because averaging it together with the points they were held on produced a number that described neither. Quickest first, which is an ordering and not a ranking.',
-    plain: true, lowerIsBetter: true, neutral: true, min: 5, whole: (t) => t.breakClockN,
-    value: (t) => (t.secondsPerBreak === null ? Infinity : t.secondsPerBreak),
-    fmt: (t) => (t.secondsPerBreak === null ? '—' : `${t.secondsPerBreak}s`),
-    sub: (t) => (t.breakClockN
-      ? `${clock(t.breakTime)} across ${t.breakClockN} break${t.breakClockN === 1 ? '' : 's'}`
-      : 'no breaks yet') },
-
-  { key: 'concedetime', label: 'Time to concede',
-    note: 'When this defence is beaten, how long they made it take. The tempting reading is that longer means they made the offence work for it, but the tournament does not bear that out: time to concede has no relationship to break rate either (r = +0.05), and like its partner it mostly tracks how long this club\'s points run (r = +0.76). Worth knowing, and worth knowing separately from Time to break — the two are named from the same side of the field and cover every defensive point between them — but not worth colouring green. Longest first, as an ordering.',
-    plain: true, neutral: true, min: 5, whole: (t) => t.concededClockN,
-    value: (t) => (t.secondsPerConcededHold === null ? -1 : t.secondsPerConcededHold),
-    fmt: (t) => (t.secondsPerConcededHold === null ? '—' : `${t.secondsPerConcededHold}s`),
-    sub: (t) => (t.concededClockN
-      ? `${clock(t.concededTime)} across ${t.concededClockN} conceded`
-      : 'never conceded on defence') },
+  { key: 'dsplit', label: 'D point split', shape: true,
+    note: 'Every defensive point ends one of two ways, and the two want reading apart. The chalk line is that club\'s OWN average defensive point; the blue bar is how long their breaks run against it, the amber bar how long their concessions do — left of the line is quicker than their normal, right is slower. Centring each club on itself is the whole trick: in raw seconds both halves are mostly a readout of how fast that club plays in general (r = +0.65 and +0.76 against its own average), so a table of raw seconds would rank tempo and call it defence. Neither end is better and nothing is coloured as good, because across the tournament neither half predicts how often a club actually breaks (r = -0.07 and +0.05). Biggest positive gap first.',
+    plain: true, neutral: true, min: 5,
+    whole: (t) => Math.min(t.breakClockN || 0, t.concededClockN || 0),
+    value: (t) => (dGap(t) === null ? -9999 : dGap(t)),
+    fmt: (t) => (dGap(t) === null ? '\u2014' : `${dGap(t) > 0 ? '+' : ''}${dGap(t)}s`),
+    sub: (t) => (dGap(t) === null
+      ? 'not enough of both halves yet'
+      : `${t.secondsPerBreak}s to break, ${t.secondsPerConcededHold}s to concede`) },
 
   { key: 'spread',  label: 'Star reliance',
     keys: [['goals', 'Goals'], ['assists', 'Assists'], ['total', 'Both']],
@@ -781,6 +783,35 @@ const STAT_VIEWS = [
 ];
 
 const pctText = (v) => (v === null || v === undefined ? '—' : `${v}%`);
+
+// Signed: positive means a club takes longer to be scored on than to score.
+const dGap = (t) => (t.secondsPerBreak === null || t.secondsPerBreak === undefined
+  || t.secondsPerConcededHold === null || t.secondsPerConcededHold === undefined)
+  ? null : t.secondsPerConcededHold - t.secondsPerBreak;
+
+// The two arms, both measured from the club's own average defensive point.
+// `span` is shared by every row in the block so lengths compare down it, and
+// is recomputed per division for the same reason the rails are.
+//
+// The arms always land on opposite sides, and that is arithmetic rather than
+// luck: the centre is the count-weighted mean of the very two numbers being
+// drawn, so it necessarily sits between them. A row can never show both bars
+// the same way, which is what keeps the column scannable — the eye reads one
+// shape flipping over, not two independent lengths.
+function shapeRail(t, span) {
+  const own = t.dSecsPerPoint;
+  if (own === null || own === undefined || dGap(t) === null) {
+    return '<span class="rl-shape"></span>';
+  }
+  const arm = (v) => {
+    const dev = v - own;
+    const w = Math.min(Math.abs(dev) / span, 1) * 50;
+    return `left:${dev < 0 ? 50 - w : 50}%;width:${Math.max(w, 1.2)}%`;
+  };
+  return `<span class="rl-shape"><s></s>` +
+    `<i class="b" style="${arm(t.secondsPerBreak)}"></i>` +
+    `<i class="c" style="${arm(t.secondsPerConcededHold)}"></i></span>`;
+}
 
 // Which slice of star reliance is on screen. The payload carries all three so
 // switching between them costs no request.
@@ -873,20 +904,27 @@ async function renderStats() {
         return statTable(rows.slice(0, 10), view, div, rows.length);
       }).join('');
 
-  const dNote = (view.key === 'breaktime' || view.key === 'concedetime')
-    ? `<div class="mnote">Across the tournament the median club takes <b>212s</b> to break and
-       <b>172s</b> to concede — breaking takes forty seconds <i>longer</i>, and only 9 clubs in
-       47 concede more slowly than they break. A break needs a turnover and usually several
-       exchanges; being held can be four passes. So most of what separates these two columns is
-       how many times the disc changed hands, not how hard anyone worked. The club profile shows
-       the version of this that controls for a club's own tempo.</div>`
+  const dNote = view.shape
+    ? `<div class="mnote">Tournament-wide the median club takes <b>212s</b> to break and
+       <b>172s</b> to concede, so breaking is the <i>slower</i> of the two and only 9 clubs in 47
+       concede more slowly than they break — a break needs a turnover and usually several
+       exchanges, while being held can be four passes. That is why a positive gap is the unusual
+       one. Bars are scaled within each division block, so lengths compare down a block and never
+       across two.</div>`
     : '';
-  const scaleNote = view.plain ? ''
+  const shapeKey = view.shape
+    ? `<div class="shapekey">
+         <span><i style="background:var(--brk)"></i>their breaks</span>
+         <span><i style="background:var(--con)"></i>their concessions</span>
+         <span>&larr; quicker than their own normal &middot; slower &rarr;</span>
+       </div>`
+    : '';
+  const scaleNote = (view.plain || view.shape) ? ''
     : `<div class="mnote">Rails are scaled within each division, to the club with the most
        ${esc(view.label.toLowerCase() === 'breaks' ? 'defensive points' : 'of them')} — so lengths
        compare down a block, never across two.</div>`;
 
-  return divBar + viewBar + keyBar + cov + body +
+  return divBar + viewBar + keyBar + shapeKey + cov + body +
     `<div class="mnote">${esc(view.note)}</div>` + dNote + scaleNote;
 }
 
@@ -926,6 +964,16 @@ function statTable(rows, view, division, totalInDivision) {
   const totWhole = view.plain ? 0 : rows.reduce((n, t) => n + (view.whole(t) || 0), 0);
   const par = totWhole > 0 ? totPart / totWhole : 0;
   const maxWhole = view.plain ? 0 : Math.max(1, ...rows.map((t) => view.whole(t) || 0));
+  // One scale for the whole block, or the bars would not compare down it.
+  let shapeSpan = null;
+  if (view.shape) {
+    const devs = rows.filter((t) => enough(view, t) && dGap(t) !== null
+        && Number.isFinite(t.dSecsPerPoint))
+      .flatMap((t) => [Math.abs(t.secondsPerBreak - t.dSecsPerPoint),
+                       Math.abs(t.secondsPerConcededHold - t.dSecsPerPoint)]);
+    shapeSpan = Math.max(20, ...devs) * 1.15;
+  }
+
   let parPlain = null;
   if (view.plain) {
     const vals = rows.filter((t) => enough(view, t))
@@ -948,7 +996,7 @@ function statTable(rows, view, division, totalInDivision) {
         <span class="rl-name"><span class="who tap"
           onclick="openTeam(${t.teamId})">${esc(t.name)}</span>
           <span class="ctry">${esc(t.country || '')}</span></span>
-        ${view.plain ? '' : `<span class="rl-rail">
+        ${view.shape ? shapeRail(t, shapeSpan) : view.plain ? '' : `<span class="rl-rail">
           <i class="rl-w" style="width:${(whole / maxWhole) * 100}%"></i>
           <i class="rl-p ${view.neutral ? 'neutral' : (good ? '' : 'under')}"
              style="width:${(part / maxWhole) * 100}%"></i>
