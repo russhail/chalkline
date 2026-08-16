@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createStore } from '../lib/store.js';
 import { handle, COOKIE, parseCookies } from '../lib/router.js';
 import { sync } from '../lib/sync.js';
-import { BetError } from '../lib/betting.js';
+import * as auth from '../lib/auth.js';
+import { placeBet, quote } from '../lib/betting.js';
 
 const NOW = Date.parse('2026-08-16T14:30:00Z');
 let store;
@@ -25,11 +26,14 @@ const cookieFrom = (r) => {
   const raw = r.headers?.['Set-Cookie'];
   return raw ? `${COOKIE}=${parseCookies(raw.split(';')[0])[COOKIE]}` : null;
 };
-let seq = 0;
-const signUp = async (name = 'Russ') => {
-  seq += 1;
-  const res = await call('POST', '/api/signup', { body: { displayName: name }, ip: `10.5.0.${seq}` });
-  return { res, cookie: cookieFrom(res) };
+// Nobody can open an account through the API any more, so the few tests that
+// still need a punter — a position to show on a game page, a stake for the
+// admin to settle — make one directly and place the bet through the engine.
+const punter = async (displayName = 'Russ') => {
+  const made = await auth.createUser(store, { displayName, now: NOW });
+  const res = await call('POST', '/api/login',
+    { body: { displayName, recoveryCode: made.recoveryCode } });
+  return { userId: made.userId, cookie: cookieFrom(res) };
 };
 
 const feed = (over = {}, version = 'v1') => async () => ({
@@ -76,70 +80,24 @@ test('the live price tracks the score, not the seeding', async () => {
     `the better-seeded side at 2-11 down should be nearly gone, got ${behind.home.prob}`);
 });
 
-test('a bet placed in play takes the live price and is marked as such', async () => {
-  await goLive({ home: 3, away: 9 });
-  const { cookie } = await signUp();
-  const live = (await call('GET', '/api/live')).body.games[0];
-
-  const bet = await call('POST', '/api/bet',
-    { body: { gameId: 1, side: 'home', stake: 500 }, cookie });
-  assert.equal(bet.status, 200, bet.body.error);
-  assert.equal(bet.body.bet.inPlay, true);
-  // 3-9 down: the price must be far longer than the pre-game one.
-  assert.ok(bet.body.bet.odds > 3, `expected a long price, got ${bet.body.bet.odds}`);
-
-  const [row] = await store.query('SELECT in_play, odds FROM bets WHERE id = $1', [bet.body.bet.betId]);
-  assert.equal(Boolean(row.in_play), true);
-});
-
-test('betting is suspended in the seconds after a point', async () => {
-  await goLive({ home: 5, away: 5, secondsAgo: 3 });
-  const { cookie } = await signUp();
-  const res = await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 100 }, cookie });
-  assert.equal(res.status, 400);
-  assert.match(res.body.error, /reopens in \d+s/);
-});
-
-test('the market reopens once the suspension elapses', async () => {
-  await goLive({ home: 5, away: 5, secondsAgo: 25 });
-  const { cookie } = await signUp();
-  const res = await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 100 }, cookie });
-  assert.equal(res.status, 200);
-});
-
 test('the live board says how long until betting reopens', async () => {
   await goLive({ home: 6, away: 6, secondsAgo: 8 });
   const g = (await call('GET', '/api/live')).body.games[0];
   assert.ok(g.suspendedFor > 0 && g.suspendedFor <= 12, `got ${g.suspendedFor}`);
 });
 
-test('handicaps close once a game is under way', async () => {
-  await goLive({ home: 4, away: 4 });
-  const { cookie } = await signUp();
-  const res = await call('POST', '/api/bet',
-    { body: { gameId: 1, side: 'home', market: 'spread', line: 1.5, stake: 100 }, cookie });
-  assert.equal(res.status, 400);
-  assert.match(res.body.error, /under way/);
-});
-
-test('an in-play stake does not move the pre-game market', async () => {
-  await goLive({ home: 7, away: 7 });
-  const { cookie } = await signUp();
-  await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 5000 }, cookie });
-  const [g] = await store.query('SELECT stake_home, stake_away FROM games WHERE id = 1');
-  assert.equal(g.stake_home, 0, 'a live stake must not drift a price driven by the score');
-});
-
 test('an in-play bet settles on the final result like any other', async () => {
   await goLive({ home: 3, away: 9 });
-  const { cookie } = await signUp();
-  const bet = await call('POST', '/api/bet',
-    { body: { gameId: 1, side: 'home', stake: 1000 }, cookie });
+  const { userId, cookie } = await punter();
+  // 3-9 down, so the engine prices this in play and the price is a long one.
+  const bet = await placeBet(store,
+    { userId, gameId: 1, side: 'home', stake: 1000, clock: () => NOW });
+  assert.equal(bet.inPlay, true);
   await store.query('UPDATE users SET is_admin = TRUE WHERE display_name = $1', ['Russ']);
   await call('POST', '/api/admin/settle',
     { body: { gameId: 1, homeScore: 15, awayScore: 13 }, cookie });
 
-  const [row] = await store.query('SELECT status, payout FROM bets WHERE id = $1', [bet.body.bet.betId]);
+  const [row] = await store.query('SELECT status, payout FROM bets WHERE id = $1', [bet.betId]);
   assert.equal(row.status, 'won', 'the comeback paid');
   assert.ok(row.payout > 3000, `a long live price should pay well, got ${row.payout}`);
 });
@@ -249,21 +207,6 @@ test('the upcoming board reports how many games are in play', async () => {
   assert.equal(after.body.liveNow, 1, 'so the board can point at them instead of hiding them');
 });
 
-test('an open bet on a game in play carries the live score', async () => {
-  const { cookie } = await signUp();
-  // The fixture kicks off before NOW, so the bet has to be placed in-play.
-  await goLive({ home: 6, away: 4, secondsAgo: 60 });
-  const placed = await call('POST', '/api/bet',
-    { body: { gameId: 1, side: 'home', stake: 200 }, cookie });
-  assert.equal(placed.status, 200, placed.body.error);
-  const mine = await call('GET', '/api/mybets', { cookie });
-  const b = mine.body.bets[0];
-  assert.equal(b.status, 'open');
-  assert.equal(b.game_status, 'live');
-  assert.equal(b.live_home_score, 6);
-  assert.equal(b.live_away_score, 4);
-});
-
 test('the live board publishes a price for both sides, never one derived in the browser', async () => {
   await goLive({ home: 8, away: 6 });
   const g = (await call('GET', '/api/live')).body.games[0];
@@ -291,43 +234,30 @@ test('no live price ever pays less than the stake', async () => {
   }
 });
 
-test('the price shown on the live board is the price the bet gets', async () => {
+test('the live board and the pricing engine quote the same game the same way', async () => {
   await goLive({ home: 13, away: 3 });
-  const { cookie } = await signUp('Shown');
   const g = (await call('GET', '/api/live')).body.games[0];
-  const bet = await call('POST', '/api/bet',
-    { body: { gameId: 1, side: 'home', stake: 100 }, cookie });
-  assert.equal(bet.status, 200, bet.body.error);
-  assert.equal(bet.body.bet.odds, g.home.decimal,
-    'board and bet must come from the same pricing call, or the board is lying');
+  // The board prices in the route and the engine prices in betting.js, from the
+  // same score. Two pricing paths that can drift apart are how the browser once
+  // came to show 0.96 for a heavy favourite, so they are pinned to each other.
+  const q = await quote(store, 1, { clock: () => NOW });
+  assert.equal(g.home.decimal, q.inPlay.home.decimal);
+  assert.equal(g.away.decimal, q.inPlay.away.decimal);
 });
 
-test('betting closes the moment the score reaches the target', async () => {
-  const { cookie } = await signUp('Sniper');
-  // 14-8: still live, still bettable.
+test('the live board marks a game decided the moment the score reaches the target', async () => {
+  // 14-8: still live, and the board is still offering it.
   await goLive({ home: 14, away: 8, version: 'd1' });
-  const before = await call('POST', '/api/bet',
-    { body: { gameId: 1, side: 'home', stake: 100 }, cookie });
-  assert.equal(before.status, 200, before.body.error);
+  const before = (await call('GET', '/api/live')).body.games[0];
+  assert.equal(before.decided, false);
+  assert.equal(before.target, 15);
 
-  // 15-8: decided. The official feed still says the game is in progress, and
-  // the winning side is sitting at the 1.02 floor — free money if it stays open.
+  // 15-8: over. The official feed still says the game is in progress, and the
+  // winning side is sitting at the 1.02 floor, so a board that keeps showing it
+  // as live is showing a certainty as a contest.
   await goLive({ home: 15, away: 8, version: 'd2' });
-  const after = await call('POST', '/api/bet',
-    { body: { gameId: 1, side: 'home', stake: 100 }, cookie });
-  assert.equal(after.status, 400);
-  assert.match(after.body.error, /closed/i);
-
-  const board = (await call('GET', '/api/live')).body.games[0];
-  assert.equal(board.decided, true, 'the board must stop offering it too');
-});
-
-test('the losing side is closed as well, not just the winner', async () => {
-  const { cookie } = await signUp('Loser');
-  await goLive({ home: 6, away: 15, version: 'd3' });
-  const res = await call('POST', '/api/bet',
-    { body: { gameId: 1, side: 'home', stake: 100 }, cookie });
-  assert.equal(res.status, 400, 'a certain loser is no fairer than a certain winner');
+  const after = (await call('GET', '/api/live')).body.games[0];
+  assert.equal(after.decided, true);
 });
 
 test('under the time cap a game is not decided until the extra point lands', async () => {
@@ -343,9 +273,9 @@ test('under the time cap a game is not decided until the extra point lands', asy
 });
 
 test('positions stay visible between points instead of flickering', async () => {
-  const { cookie } = await signUp('Watcher');
+  const { userId } = await punter('Watcher');
   await goLive({ home: 5, away: 4, secondsAgo: 60, version: 'r1' });
-  await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 100 }, cookie });
+  await placeBet(store, { userId, gameId: 1, side: 'home', stake: 100, clock: () => NOW });
 
   const open = await call('GET', '/api/game/1');
   assert.equal(open.body.revealed, true, 'a game under way shows everyone their positions');

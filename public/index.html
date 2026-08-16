@@ -4,8 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="theme-color" content="#0a0c10">
-<title>Chalk Line — WUCC 2026 play-money betting</title>
-<meta name="description" content="Play-money betting on every game at the World Ultimate Club Championships 2026. No real money, no prizes.">
+<title>Chalk Line — WUCC 2026 scores, stats and predictions</title>
+<meta name="description" content="Live scores, results, model rankings and point-by-point stats for every game at the World Ultimate Club Championships 2026.">
 <style>
 :root{
   --bg:#0a0c10; --surface:#141820; --surface-2:#1c212b; --line:#262d3a;
@@ -37,9 +37,6 @@ header{
 .bar{display:flex;align-items:center;gap:12px;padding:12px 16px;max-width:900px;margin:0 auto}
 .brand{display:flex;align-items:baseline;gap:8px;font-weight:800;letter-spacing:-.02em;font-size:17px;flex-shrink:0}
 .brand .mark{width:22px;height:3px;background:var(--chalk);border-radius:2px;display:inline-block;margin-bottom:3px}
-.roll{margin-left:auto;text-align:right;line-height:1.15}
-.roll .n{font-weight:700;font-variant-numeric:tabular-nums;font-size:16px}
-.roll .l{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--dim)}
 nav{display:flex;gap:2px;padding:0 10px 10px;max-width:900px;margin:0 auto;overflow-x:auto;scrollbar-width:none}
 nav::-webkit-scrollbar{display:none}
 nav button{
@@ -69,14 +66,16 @@ main{max-width:900px;margin:0 auto;padding:14px 12px 120px}
    sideways on a phone. Both the cell and the text block have to be allowed to
    shrink before the ellipsis can do its job. */
 .side{background:var(--surface-2);border:1px solid transparent;border-radius:9px;
-  padding:9px 10px;display:flex;align-items:center;gap:8px;text-align:left;transition:.12s;
+  padding:9px 10px;display:flex;align-items:center;gap:8px;text-align:left;
   min-width:0;overflow:hidden}
-.side:active{transform:scale(.985)}
-.side.sel{border-color:var(--chalk);background:#232a36}
 .side .nm{flex:1;min-width:0;overflow:hidden}
 .side .n1{font-weight:650;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .side .n2{font-size:10.5px;color:var(--dim);margin-top:1px}
-.side .od{font-weight:800;font-variant-numeric:tabular-nums;font-size:15px;color:var(--up)}
+/* This slot held the decimal odds and was green, because a price is something
+   you either take or leave. It now holds a win probability, and the two halves
+   of one are not a good side and a bad side — so it is uncoloured, the same
+   decision .winpct already makes about the pair of numbers under the bar. */
+.side .od{font-weight:800;font-variant-numeric:tabular-nums;font-size:15px;color:var(--text)}
 .empty{text-align:center;color:var(--dim);padding:50px 20px;font-size:14px}
 .game.live{border-color:#2b3a44}
 .livenote{font-size:11.5px;color:var(--dim);line-height:1.5;margin:0 4px 12px}
@@ -95,16 +94,8 @@ main{max-width:900px;margin:0 auto;padding:14px 12px 120px}
 .winbar span{display:block;height:100%;background:var(--up);transition:width .4s ease}
 .winpct{display:flex;justify-content:space-between;font-size:10.5px;color:var(--dim);
   font-weight:700;margin-top:4px;font-variant-numeric:tabular-nums}
-.expand{width:100%;display:flex;align-items:center;justify-content:space-between;
-  margin-top:8px;padding:7px 2px 1px;font-size:11.5px;font-weight:600;color:var(--muted)}
-.expand .chev{font-size:15px;color:var(--dim);width:18px;text-align:center}
-.spreads{margin-top:6px;display:flex;flex-direction:column;gap:6px}
-.sprow{display:grid;grid-template-columns:1fr 1fr;gap:7px}
-.side.sp{padding:7px 9px;background:#171c25}
-.side.sp .n1{font-size:12.5px;font-weight:600}
-.side.sp .n2{color:var(--chalk);font-weight:700;font-size:11px}
-.side.sp .od{font-size:13.5px}
 .spnote{font-size:10.5px;color:var(--dim);line-height:1.45;padding:2px 2px 0}
+.game .spnote{margin-top:8px}
 
 
 /* ---- stats ---- */
@@ -144,7 +135,10 @@ main{max-width:900px;margin:0 auto;padding:14px 12px 120px}
 .rl-val{text-align:right;font-size:15px;font-weight:800;font-variant-numeric:tabular-nums;
   letter-spacing:-.01em;color:var(--muted)}
 .rl-val.up{color:var(--up)}
-.rl-name .who.tap{cursor:pointer;border-bottom:1px dotted var(--dim)}
+/* Unscoped, because a club name is now tappable from four different lists and
+   the dotted underline is the only thing telling a reader there is a profile
+   behind it. Wherever the name goes, the affordance goes with it. */
+.who.tap{cursor:pointer;border-bottom:1px dotted var(--dim)}
 
 /* club profile */
 .pfhead{padding:2px 4px 12px}
@@ -199,24 +193,10 @@ main{max-width:900px;margin:0 auto;padding:14px 12px 120px}
 .shapekey i{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:5px;
   vertical-align:-1px}
 
-/* ---- slip ---- */
-#slip{position:fixed;left:0;right:0;bottom:0;z-index:50;background:var(--surface);
-  border-top:1px solid var(--line);padding:12px 14px calc(12px + env(safe-area-inset-bottom));
-  box-shadow:0 -14px 34px rgba(0,0,0,.5)}
-#slip .top{display:flex;align-items:center;gap:10px;margin-bottom:9px}
-#slip .who{font-weight:700;font-size:14px;flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-#slip .at{font-weight:800;color:var(--up);font-variant-numeric:tabular-nums}
-#slip .row{display:flex;gap:8px;align-items:center}
-#slip input{flex:1;background:var(--bg);border:1px solid var(--line);border-radius:9px;
-  padding:11px 12px;font-size:16px;font-weight:700;font-variant-numeric:tabular-nums;width:100%}
+/* ---- buttons ---- */
 .btn{background:var(--chalk);color:#0b0e13;font-weight:800;padding:11px 18px;border-radius:9px;font-size:14px}
 .btn:disabled{opacity:.4}
 .btn.ghost{background:var(--surface-2);color:var(--text);font-weight:600}
-.quick{display:flex;gap:6px;margin-top:8px}
-.quick button{background:var(--surface-2);border-radius:7px;padding:6px 0;flex:1;font-size:12px;
-  font-weight:600;color:var(--muted)}
-#slip .ret{font-size:11.5px;color:var(--dim);margin-top:8px}
-#slip .x{color:var(--dim);font-size:20px;padding:0 4px;line-height:1}
 
 /* ---- tables / lists ---- */
 .lb{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);overflow:hidden}
@@ -240,11 +220,6 @@ main{max-width:900px;margin:0 auto;padding:14px 12px 120px}
 .tabs button{padding:6px 12px;border-radius:99px;background:var(--surface);font-size:12.5px;
   font-weight:600;color:var(--muted);white-space:nowrap;border:1px solid var(--line)}
 .tabs button.on{background:var(--chalk);color:#0b0e13;border-color:var(--chalk)}
-.bet{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:11px 12px;margin-bottom:7px}
-.bet .h{display:flex;align-items:center;gap:8px;font-size:13px}
-.bet .h .s{margin-left:auto;font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.05em}
-.s.won{color:var(--up)} .s.lost{color:var(--down)} .s.open{color:var(--muted)} .s.void{color:var(--dim)}
-.bet .d{font-size:11.5px;color:var(--dim);margin-top:5px;font-variant-numeric:tabular-nums}
 
 /* ---- modal ---- */
 .modal{position:fixed;inset:0;z-index:100;background:rgba(6,8,11,.86);
@@ -278,7 +253,6 @@ footer{max-width:900px;margin:0 auto;padding:26px 16px 40px;color:var(--dim);fon
 <header>
   <div class="bar">
     <div class="brand"><span class="mark"></span>Chalk&nbsp;Line</div>
-    <div class="roll" id="roll"></div>
   </div>
   <nav id="nav"></nav>
 </header>
@@ -286,26 +260,40 @@ footer{max-width:900px;margin:0 auto;padding:26px 16px 40px;color:var(--dim);fon
 <main id="view"><div class="empty">Loading the board…</div></main>
 
 <footer>
-  <strong>Play money only.</strong> Chalk Line is a game. No real money is staked, held, or paid out,
-  and there are no prizes. Not affiliated with WFDF or WUCC.<br>
-  Results from the official WFDF feed. 18+.
+  Chalk Line is an unofficial fan site. Every score and result comes from the official
+  WFDF feed. Not affiliated with WFDF or WUCC.
+  <div id="foot"></div>
 </footer>
 
-<div id="slip" class="hide"></div>
 <div id="modal"></div>
 
 <script>
 const $ = (s, r = document) => r.querySelector(s);
-const money = n => Math.round(Number(n) || 0).toLocaleString('en-GB');
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
-const S = { user: null, tab: 'board', sel: null, div: 'all',
-  teamId: null, relianceKey: 'total',
-            lbTab: 'bankroll', open: new Set(), query: '', results: null,
+const S = { user: null, tab: 'board', div: 'all',
+  teamId: null, teamFrom: null, relianceKey: 'total',
+            query: '', results: null,
             stats: null, statsDiv: null, statView: 'breaks', statDivision: '',
             days: [], day: null, gamesByDay: {}, openDays: new Set(),
-            live: [], liveCount: 0 };
+            live: [], liveCount: 0,
+            resDiv: '', resDay: null, resDays: [], resGames: [], resLoaded: false,
+            rankDiv: '', ranks: [], rankKey: null };
+
+// The three divisions never play each other, so every ranked or filtered view
+// offers the same four choices and they may as well be written down once.
+const DIVISIONS = [['', 'All divisions'], ['Open', 'Open'], ["Women's", "Women's"], ['Mixed', 'Mixed']];
+
+// The chips assign straight into state, the way the stats page already does.
+// The division lands inside a JavaScript string inside an onclick attribute,
+// so the apostrophe in "Women's" has to be escaped for that inner string or
+// the handler stops parsing halfway through the word.
+function divisionChips(current, field) {
+  return `<div class="stat-tabs">${DIVISIONS.map(([k, l]) =>
+    `<button class="${current === k ? 'on' : ''}"
+       onclick="S.${field}='${k.replace(/'/g, "\\'")}';render()">${esc(l)}</button>`).join('')}</div>`;
+}
 
 async function api(path, opts = {}) {
   const res = await fetch('/api' + path, {
@@ -336,23 +324,26 @@ const dayKey = iso => new Date(iso).toLocaleDateString([], { weekday: 'long', da
 
 // --- chrome ----------------------------------------------------------------
 function renderChrome() {
-  $('#roll').innerHTML = S.user
-    ? `<div class="n">${money(S.user.bankroll)} <span style="font-size:11px;font-weight:600;color:var(--dim)">bucks</span></div>
-       <div class="l">${esc(S.user.displayName)} <span style="color:${
-         S.user.net >= 0 ? 'var(--up)' : 'var(--down)'};font-weight:700">${
-         S.user.net >= 0 ? '+' : '−'}${money(Math.abs(S.user.net || 0))}</span></div>`
-    : `<button class="btn" style="padding:7px 14px;font-size:13px" onclick="openAuth('signup')">Join</button>`;
-
-  const tabs = [['board', 'Upcoming']];
+  // Live leads when there is anything live, because a game in progress is the
+  // only thing on this site that will not still be here in an hour.
+  const tabs = [];
   if (S.liveCount) tabs.push(['live', `Live · ${S.liveCount}`]);
-  tabs.push(['bets', 'My bets'], ['leaders', 'Leaderboard'], ['stats', 'Stats']);
+  tabs.push(['board', 'Upcoming'], ['results', 'Results'],
+            ['rankings', 'Rankings'], ['stats', 'Stats']);
   if (S.user?.isAdmin) tabs.push(['admin', 'Admin']);
-  if (S.user) tabs.push(['account', 'Account'], ['out', 'Sign out']);
-  // A club profile is reached from the stats tab and belongs to it, so the
-  // nav keeps Stats lit rather than showing nothing selected.
-  const lit = S.tab === 'team' ? 'stats' : S.tab;
+  if (S.user) tabs.push(['out', 'Sign out']);
+  // A club profile has no tab of its own, so the nav keeps whichever list you
+  // opened it from lit rather than showing nothing selected.
+  const lit = S.tab === 'team' ? (S.teamFrom || 'stats') : S.tab;
   $('#nav').innerHTML = tabs.map(([k, l]) =>
-    `<button class="${lit === k ? 'on' : ''}" onclick="go('${k}')">${l}</button>`).join('');
+    `<button class="${lit === k ? 'on' : ''}" onclick="go('${k}')">${esc(l)}</button>`).join('');
+
+  // There is nothing here for a visitor to sign up to any more — the only
+  // account that does anything is the one that settles games. So sign-in is a
+  // footer link that says what it is for, rather than a prompt in the header.
+  $('#foot').innerHTML = S.user ? ''
+    : `<button onclick="openLogin()" style="color:var(--dim);text-decoration:underline;
+         font-size:11px;margin-top:8px">Admin</button>`;
 }
 
 async function go(tab) {
@@ -360,7 +351,6 @@ async function go(tab) {
     await api('/logout', { method: 'POST' });
     S.user = null; S.tab = 'board'; renderChrome(); return render();
   }
-  if (tab !== 'board') closeSlip();
   S.tab = tab; renderChrome(); render();
 }
 
@@ -392,7 +382,7 @@ async function tick() {
     const r = await api('/tick');
     if (!r.skipped && (r.settled > 0 || r.games?.created > 0 || r.games?.teamsResolved > 0)) {
       await loadGames();
-      if (S.tab === 'board' && !S.sel) $('#view').innerHTML = renderBoard();
+      if (S.tab === 'board') $('#view').innerHTML = renderBoard();
     }
   } catch {
     // A failed refresh is invisible on purpose — the board still has data.
@@ -407,15 +397,15 @@ function renderBoard() {
     html += `<button class="livebanner" onclick="go('live')">
       <span class="dot"></span>
       <span class="lb-t">${S.liveCount} game${S.liveCount === 1 ? '' : 's'} in play</span>
-      <span class="lb-s">Bet on the current score &rsaquo;</span>
+      <span class="lb-s">Follow the score &rsaquo;</span>
     </button>`;
   }
   html += `<div class="tabs">${divs.map(d =>
     `<button class="${S.div === d ? 'on' : ''}" onclick="S.div='${d.replace(/'/g, "\\'")}';render()">${d === 'all' ? 'All' : d}</button>`).join('')}</div>`;
 
   if (!S.days.length) {
-    return html + `<div class="empty">No games open for betting right now.<br>
-      <span style="font-size:12px">Lines appear as soon as the next round is scheduled.</span></div>`;
+    return html + `<div class="empty">Nothing scheduled right now.<br>
+      <span style="font-size:12px">Fixtures appear as soon as the next round is drawn.</span></div>`;
   }
 
   for (const d of S.days) {
@@ -465,8 +455,11 @@ async function toggleDay(day) {
   }
 }
 
-// The handicap ladder. Positive line = the home side must win by more than
-// that; negative = they can lose by less than it.
+// One fixture: who, when, how likely each side is, and by how much. The
+// handicap ladder that used to hang off the bottom of this card was a market
+// and has gone with the rest of them; the model's expected margin is the one
+// thing it said that was worth keeping, so it is stated outright instead of
+// hidden behind an expander.
 function gameCard(g) {
   return `<div class="game">
     <div class="meta">
@@ -474,44 +467,21 @@ function gameCard(g) {
       ${g.pool ? `<span>${esc(g.pool)}</span>` : ''}
       <span class="t">${fmtTime(g.startsAt)} · ${fmtIrish(g.startsAt)} Limerick</span>
     </div>
-    <div class="sides">${sideBtn(g, 'home')}${sideBtn(g, 'away')}</div>
-    <button class="expand" onclick="toggleSpreads(${g.id},event)">
-      <span>Winning margin</span>
-      <span class="chev" id="chev${g.id}">${S.open.has(g.id) ? '&minus;' : '+'}</span>
-    </button>
-    <div id="sp${g.id}" class="${S.open.has(g.id) ? '' : 'hide'}">${spreadRows(g)}</div>
+    <div class="sides">${sidePanel(g, 'home')}${sidePanel(g, 'away')}</div>
+    ${marginNote(g)}
   </div>`;
 }
 
-function spreadRows(g) {
-  if (!g.spreads?.length) return '';
-  return `<div class="spreads">` + g.spreads.map((sp) => {
-    const h = sp.line > 0 ? `-${Math.abs(sp.line)}` : `+${Math.abs(sp.line)}`;
-    const a = sp.line > 0 ? `+${Math.abs(sp.line)}` : `-${Math.abs(sp.line)}`;
-    return `<div class="sprow">
-      ${spreadBtn(g, 'home', sp, h)}${spreadBtn(g, 'away', sp, a)}
-    </div>`;
-  }).join('') + `<div class="spnote">Half points, so every bet wins or loses — no ties.
-    These are model-priced and don't move with the money.</div></div>`;
-}
-
-function spreadBtn(g, side, sp, label) {
-  const t = g[side];
-  const on = S.sel && S.sel.gameId === g.id && S.sel.side === side
-    && S.sel.market === 'spread' && S.sel.line === sp.line;
-  return `<button class="side sp ${on ? 'sel' : ''}"
-      onclick="pick(${g.id},'${side}','spread',${sp.line})">
-    <span class="nm"><div class="n1">${esc(t.name)}</div>
-      <div class="n2">${label}</div></span>
-    <span class="od">${sp[side].decimal.toFixed(2)}</span></button>`;
-}
-
-function toggleSpreads(id, ev) {
-  ev?.stopPropagation();
-  if (S.open.has(id)) S.open.delete(id); else S.open.add(id);
-  const el = $('#sp' + id), ch = $('#chev' + id);
-  if (el) el.classList.toggle('hide', !S.open.has(id));
-  if (ch) ch.innerHTML = S.open.has(id) ? '&minus;' : '+';
+// `margin` is signed towards the home side and already snapped to half points.
+// Anything under a full point is reported as no opinion rather than rounded
+// into one: a game the model splits 51/49 has no favourite worth naming, and
+// "by 0" would read as a prediction of a draw, which ultimate does not have.
+function marginNote(g) {
+  const m = Number(g.margin);
+  if (!Number.isFinite(m)) return '';
+  if (Math.abs(m) < 1) return `<div class="spnote">Model makes this one too close to call.</div>`;
+  const t = m > 0 ? g.home : g.away;
+  return `<div class="spnote">Model expects ${esc(t.name)} by ${Math.round(Math.abs(m))}.</div>`;
 }
 
 function searchBar() {
@@ -563,7 +533,7 @@ function renderSearch() {
   }
 
   html += `<div style="margin-bottom:12px">` + r.teams.map(t =>
-    `<span class="teamchip">${esc(t.name)}
+    `<span class="teamchip">${teamLink(t)}
       <span class="s">${esc(t.division || '')}${t.seed ? ' · #' + t.seed : ''}</span></span>`).join('') + `</div>`;
 
   if (r.games.length) {
@@ -575,7 +545,7 @@ function renderSearch() {
       html += gameCard(g);
     }
   } else {
-    html += `<div class="empty" style="padding:30px">No games left to bet on.</div>`;
+    html += `<div class="empty" style="padding:30px">Nothing left to play.</div>`;
   }
 
   if (r.results?.length) {
@@ -587,140 +557,27 @@ function renderSearch() {
   return html;
 }
 
-function sideBtn(g, side) {
+function sidePanel(g, side) {
   const t = g[side];
-  const on = S.sel && S.sel.gameId === g.id && S.sel.side === side;
-  return `<button class="side ${on ? 'sel' : ''}" onclick="pick(${g.id},'${side}')">
-    <span class="nm"><div class="n1">${esc(t.name)}</div>
+  // No longer a button. It used to place a bet; there is nothing to place, so
+  // the panel is inert and only the club name is tappable — through to the
+  // profile, like every other club name on the site.
+  return `<div class="side">
+    <span class="nm"><div class="n1">${teamLink(t)}</div>
       <div class="n2">${esc(t.country || '')}${t.seed ? ' · #' + t.seed : ''}</div></span>
-    <span class="od">${t.odds.toFixed(2)}</span></button>`;
+    <span class="od">${winPct(t.prob)}</span></div>`;
 }
 
-// --- bet slip --------------------------------------------------------------
-function pick(gameId, side, market = 'moneyline', line = null) {
-  if (!S.user) return openAuth('signup');
-  // Compare as strings: ids have arrived as both numbers and strings
-  // depending on the backend, and a silent mismatch here means a tap that
-  // does nothing at all.
-  // A searched or live fixture isn't on the day board, so look everywhere.
-  const pool = [...Object.values(S.gamesByDay || {}).flat(),
-                ...((S.results && S.results.games) || []), ...(S.live || [])];
-  const g = pool.find(x => String(x.id) === String(gameId));
-  if (!g) { toast('That game is no longer open.'); return; }
-  const rung = market === 'spread'
-    ? (g.spreads || []).find((sp) => sp.line === line) : null;
-  if (market === 'spread' && !rung) return;
-  const odds = rung ? rung[side].decimal : g[side].odds;
-  const label = rung
-    ? `${g[side].name} ${(side === 'home' ? line > 0 : line <= 0) ? '−' : '+'}${Math.abs(line)}`
-    : g[side].name;
-  S.sel = { gameId, side, market, line, name: label, odds, stake: 500 };
-  render();
-  renderSlip();
-}
+// A win probability, rounded for display. The two sides of a fixture come off
+// the server summing to exactly 1, so rounding each independently is safe.
+const winPct = (p) => `${Math.round((Number(p) || 0) * 100)}%`;
 
-function renderSlip() {
-  const s = S.sel;
-  if (!s) return closeSlip();
-  $('#slip').classList.remove('hide');
-  $('#slip').innerHTML = `
-    <div class="top">
-      <div class="who">${esc(s.name)}</div>
-      <div class="at">${s.odds.toFixed(2)}</div>
-      <button class="x" onclick="closeSlip()">&times;</button>
-    </div>
-    <div class="row">
-      <input id="stake" type="number" inputmode="numeric" min="10" value="${s.stake}"
-        oninput="S.sel.stake=Math.max(0,+this.value||0);$('#ret').textContent=retText()">
-      <button class="btn" id="place" onclick="place()">Place bet</button>
-    </div>
-    <div class="quick">
-      ${[100, 500, 1000, 'Max'].map(v =>
-        `<button onclick="setStake('${v}')">${v === 'Max' ? 'Max' : money(v)}</button>`).join('')}
-    </div>
-    <div class="ret" id="ret">${retText()}</div>`;
-}
-
-function retText() {
-  const s = S.sel;
-  if (!s) return '';
-  return `Returns ${money(s.stake * s.odds)} · profit ${money(s.stake * s.odds - s.stake)}`;
-}
-
-function setStake(v) {
-  S.sel.stake = v === 'Max' ? Math.floor(S.user.bankroll) : Number(v);
-  $('#stake').value = S.sel.stake;
-  $('#ret').textContent = retText();
-}
-
-function closeSlip() { S.sel = null; $('#slip').classList.add('hide'); }
-
-async function place() {
-  const s = S.sel;
-  if (!s) return;
-  $('#place').disabled = true;
-  try {
-    const r = await api('/bet', { body: {
-      gameId: s.gameId, side: s.side, stake: s.stake,
-      market: s.market, line: s.line } });
-    // Stake leaves the account but nothing has been decided, so profit is
-    // unchanged until the bet settles. Only the balance moves here.
-    S.user.bankroll = r.bet.bankroll;
-    renderChrome();
-    toast(`Bet placed — returns ${money(r.bet.toReturn)}`);
-
-    // The slip clears once the bet is down, so what's on screen is always
-    // something you haven't bet yet. Betting the same game again is a tap on
-    // the board, which reopens the slip at the current price rather than the
-    // one you just took.
-    //
-    // Only the slip closes — the board is deliberately NOT repainted here.
-    // Repainting during the tap was what made a second bet feel impossible:
-    // every card was destroyed and rebuilt underneath the finger. Odds drift
-    // is picked up by the next poll.
-    closeSlip();
-  } catch (e) {
-    toast(e.message);
-    const b = $('#place');
-    if (b) b.disabled = false;
-  }
-}
-
-// --- my bets ---------------------------------------------------------------
-async function renderBets() {
-  const d = await api('/mybets');
-  if (!d.bets.length) return `<div class="empty">No bets yet.<br>
-    <span style="font-size:12px">Pick a side on the board to get started.</span></div>`;
-  const open = d.bets.filter(b => b.status === 'open');
-  const done = d.bets.filter(b => b.status !== 'open');
-  const section = (title, list) => list.length
-    ? `<div class="day">${title}</div>` + list.map(betRow).join('') : '';
-  return section('Open', open) + section('Settled', done);
-}
-
-function betRow(b) {
-  {
-    const team = b.side === 'home' ? b.home_name : b.away_name;
-    const pick = b.market === 'spread'
-      ? `${team} ${(b.side === 'home' ? b.line > 0 : b.line <= 0) ? '−' : '+'}${Math.abs(b.line)}`
-      : team;
-    const live = b.game_status === 'live' && b.live_home_score != null;
-    const score = b.home_score != null ? ` · ${b.home_score}–${b.away_score}`
-      : live ? ` · ${b.live_home_score}–${b.live_away_score} live` : '';
-    const res = b.status === 'won' ? `+${money(b.payout - b.stake)}`
-      : b.status === 'lost' ? `−${money(b.stake)}`
-      : b.status === 'void' ? 'refunded' : `→ ${money(b.stake * b.odds)}`;
-    return `<button class="bet" style="width:100%;text-align:left;display:block"
-        onclick="openGame(${b.game_id})">
-      <div class="h"><strong>${esc(pick)}</strong>
-        <span class="s ${b.status}" style="${live && b.status === 'open' ? 'color:var(--up)' : ''}">
-          ${live && b.status === 'open' ? 'in play' : b.status}</span></div>
-      <div class="d">${esc(b.home_name || '?')} v ${esc(b.away_name || '?')}${score}
-        &nbsp;·&nbsp; ${money(b.stake)} @ ${Number(b.odds).toFixed(2)} &nbsp;·&nbsp; ${res}</div>
-    </button>`;
-  }
-}
-
+// A club name with its profile behind it, or a plain name when the payload
+// has no id to link to — /search's played games are the one place that
+// happens, and a dotted underline leading nowhere is worse than no underline.
+const teamLink = (t) => (t && t.id
+  ? `<span class="who tap" onclick="openTeam(${t.id})">${esc(t.name)}</span>`
+  : esc(t?.name));
 
 // --- stats dashboard -------------------------------------------------------
 //
@@ -993,8 +850,7 @@ function statTable(rows, view, division, totalInDivision) {
     return `<div class="rl ${enough(view, t) ? '' : 'thin'}">
       <span class="rl-rk">${i + 1}</span>
       <span class="rl-main">
-        <span class="rl-name"><span class="who tap"
-          onclick="openTeam(${t.teamId})">${esc(t.name)}</span>
+        <span class="rl-name">${teamLink({ id: t.teamId, name: t.name })}
           <span class="ctry">${esc(t.country || '')}</span></span>
         ${view.shape ? shapeRail(t, shapeSpan) : view.plain ? '' : `<span class="rl-rail">
           <i class="rl-w" style="width:${(whole / maxWhole) * 100}%"></i>
@@ -1127,9 +983,15 @@ function dShapeBlock(d, name) {
   </div>`;
 }
 
+// Where "back" goes. A profile used to be reachable only from the stats table;
+// it is now reachable from four lists, and dropping someone into a table they
+// were never looking at is a worse answer than remembering where they came in.
+const CAME_FROM = { stats: 'All clubs', rankings: 'Rankings', results: 'Results',
+  board: 'Upcoming', live: 'Live' };
+
 function openTeam(id) {
   if (!id) return;
-  closeSlip();
+  if (S.tab !== 'team') S.teamFrom = S.tab;
   S.teamId = id; S.tab = 'team'; renderChrome(); render();
 }
 
@@ -1137,8 +999,9 @@ async function renderTeam() {
   const p = await api('/team?id=' + encodeURIComponent(S.teamId));
   const t = p.team, st = p.stats;
 
-  const back = `<button class="dayhead" onclick="go('stats')">
-      <span class="dh-c">‹</span><span class="dh-l">All clubs</span></button>`;
+  const from = CAME_FROM[S.teamFrom] ? S.teamFrom : 'stats';
+  const back = `<button class="dayhead" onclick="go('${from}')">
+      <span class="dh-c">‹</span><span class="dh-l">${esc(CAME_FROM[from])}</span></button>`;
 
   const head = `<div class="pfhead">
     <div class="pfn">${esc(t.name)}</div>
@@ -1183,59 +1046,162 @@ async function renderTeam() {
     comboBlock(p.combos, null, 'Connections');
 }
 
-// --- leaderboards ----------------------------------------------------------
-async function renderLeaders() {
-  const d = await api('/leaderboard');
-  const tabs = [['bankroll', 'Profit'], ['daily', 'Today'], ['roi', 'ROI'], ['biggest', 'Biggest win']];
-  let html = `<div class="tabs">${tabs.map(([k, l]) =>
-    `<button class="${S.lbTab === k ? 'on' : ''}" onclick="S.lbTab='${k}';render()">${l}</button>`).join('')}</div>`;
-
-  const rows = {
-    bankroll: () => d.bankroll.map((r, i) => row(i, r.display_name,
-      `${r.net >= 0 ? '+' : '−'}${money(Math.abs(r.net))}`, bankrollSub(r), r.net >= 0)),
-    daily: () => d.daily.map((r, i) => row(i, r.display_name,
-      `${r.net >= 0 ? '+' : '−'}${money(Math.abs(r.net))}`,
-      `${r.wins}/${r.settled} settled today`, r.net >= 0)),
-    roi: () => d.roi.map((r, i) => row(i, r.display_name,
-      `${r.roi > 0 ? '+' : ''}${r.roi}%`, `${money(r.staked)} staked`, r.roi >= 0)),
-    biggest: () => d.biggest.map((r, i) => row(i, r.display_name,
-      `+${money(r.profit)}`, bigSub(r), true)),
-  }[S.lbTab]();
-
-  return html + (rows.length ? `<div class="lb">${rows.join('')}</div>`
-    : `<div class="empty">Nothing here yet.</div>`);
+// --- results ----------------------------------------------------------------
+//
+// The mirror of the board. Same day-by-day shape, because the question is the
+// same one asked backwards — the board is "what is still to come", this is
+// "what did I miss" — and a reader who has learned one list should not have to
+// learn the other.
+//
+// Unlike the board, only one day is open at a time. /results serves a day per
+// request and the newest one is what almost everybody wants; letting several
+// stack open would mean holding days in memory to answer a question nobody is
+// asking.
+async function loadResults(day) {
+  const d = await api('/results' + (day ? '?day=' + encodeURIComponent(day) : ''));
+  S.resDays = d.days || [];
+  // Whatever we asked for, the server decides which day it actually served —
+  // on the first visit we ask for nothing and it picks the newest.
+  S.resDay = d.day;
+  S.resGames = d.games || [];
+  S.resLoaded = true;
 }
 
-// "0/0 won" reads as someone who has never bet. Say what's actually true:
-// a record only once there is one, and money still riding whenever there is.
-// What the bet actually was. The profit alone doesn't say whether someone
-// called an upset or leaned on a favourite with a big stake.
-function bigSub(r) {
-  const pick = r.pick
-    ? (r.market === 'spread' && r.line !== null
-        ? `${r.pick} ${r.line > 0 ? '−' : '+'}${Math.abs(r.line)}`
-        : r.pick)
-    : 'a pick';
-  const bits = [`${esc(pick)} @ ${Number(r.odds).toFixed(2)}`];
-  if (r.against) bits.push(`v ${esc(r.against)}${r.score ? ` ${r.score}` : ''}`);
-  bits.push(`${money(r.stake)} → ${money(r.payout)}`);
-  if (r.in_play) bits.push('in-play');
-  return bits.join(' · ');
+function pickResultDay(day) {
+  if (day === S.resDay) return;
+  S.resDay = day; S.resLoaded = false;
+  render();
 }
 
-function bankrollSub(r) {
-  const parts = [`${money(r.bankroll)} bucks`];
-  if (r.bets > 0) parts.push(`${r.wins}/${r.bets} won`);
-  if (r.openBets > 0) parts.push(`${money(r.atRisk)} on ${r.openBets} open`);
-  if (r.topups) parts.push(`${r.topups} top-up${r.topups > 1 ? 's' : ''}`);
-  return parts.join(' · ');
+async function renderResults() {
+  // The day is null until the server has picked one, so "have we fetched yet"
+  // cannot be inferred from it and needs a flag of its own.
+  if (!S.resLoaded) await loadResults(S.resDay);
+
+  let html = divisionChips(S.resDiv, 'resDiv');
+  if (!S.resDays.length) {
+    return html + `<div class="empty">Nothing has finished yet.<br>
+      <span style="font-size:12px">Scores land here within a few minutes of the last point.</span></div>`;
+  }
+
+  for (const d of S.resDays) {
+    const on = d.day === S.resDay;
+    html += `<button class="dayhead ${on ? 'on' : ''}" onclick="pickResultDay('${d.day}')">
+      <span class="dh-l">${dayLabel(d.day)}</span>
+      <span class="dh-n">${d.games} game${d.games === 1 ? '' : 's'}</span>
+      <span class="dh-c">${on ? '&minus;' : '+'}</span>
+    </button>`;
+    if (!on) continue;
+    // Filtered in the browser rather than by /results?division=, so switching
+    // divisions costs no request and the counts in the headers keep meaning
+    // "games that day" instead of quietly changing meaning under the chips.
+    // Same trade the board already makes.
+    const shown = S.resDiv ? S.resGames.filter((g) => g.division === S.resDiv) : S.resGames;
+    if (!shown.length) {
+      html += `<div class="empty" style="padding:20px">${S.resDiv
+        ? `Nothing in ${esc(S.resDiv)} on this day.` : 'Nothing on this day.'}</div>`;
+      continue;
+    }
+    for (const g of shown) html += resultCard(g);
+  }
+  return html;
 }
 
-function row(i, name, value, sub, good) {
-  const col = good === undefined ? '' : `style="color:${good ? 'var(--up)' : 'var(--down)'}"`;
-  return `<div class="r"><span class="rk">${i + 1}</span>
-    <span class="nm">${esc(name)}<div class="sub">${esc(sub)}</div></span>
-    <span class="v" ${col}>${value}</span></div>`;
+function resultCard(g) {
+  // A voided game has a score in the database and that score means nothing, so
+  // it is dimmed and labelled rather than shown as if it were a result. A
+  // forfeit is the opposite case: the result stands, it just wasn't played.
+  const home = g.score.home, away = g.score.away;
+  return `<div class="game"${g.voided ? ' style="opacity:.6"' : ''}>
+    <div class="meta">
+      <span class="pill">${esc(g.division || '')}</span>
+      ${g.pool ? `<span>${esc(g.pool)}</span>` : ''}
+      ${g.voided ? `<span class="pill" style="color:var(--down)">VOID</span>` : ''}
+      ${g.forfeit ? `<span class="pill" style="color:var(--down)">FORFEIT</span>` : ''}
+      <span class="t">${fmtTime(g.startsAt)}</span>
+    </div>
+    <div class="livescore">
+      <span class="ls-n">${teamLink(g.home)}
+        <div class="sub">${esc(g.home.country || '')}${g.home.seed ? ' · #' + g.home.seed : ''}</div></span>
+      <span class="ls-s"${g.voided ? ' style="color:var(--dim)"' : ''}>${
+        home}<span class="ls-d">–</span>${away}</span>
+      <span class="ls-n" style="text-align:right">${teamLink(g.away)}
+        <div class="sub">${esc(g.away.country || '')}${g.away.seed ? ' · #' + g.away.seed : ''}</div></span>
+    </div>
+    ${g.voided ? `<div class="spnote">Voided${g.voidReason ? ` — ${esc(g.voidReason)}` : ''}.
+      The score above does not stand.</div>` : ''}
+    ${g.forfeit && !g.voided ? `<div class="spnote">Awarded by forfeit.</div>` : ''}
+  </div>`;
+}
+
+// --- rankings ---------------------------------------------------------------
+//
+// The model's own order, which is not the seeding, and the gap between the two
+// is the only thing on this page you could not have read off a draw sheet.
+async function renderRankings() {
+  // The division is always a string, so null is a sentinel it can never match
+  // and the first render always fetches. Results needs a separate flag because
+  // its key is a day, and the day genuinely is null until the server picks one.
+  if (S.rankKey !== S.rankDiv) {
+    const q = S.rankDiv ? '?division=' + encodeURIComponent(S.rankDiv) : '';
+    S.ranks = (await api('/rankings' + q)).teams || [];
+    S.rankKey = S.rankDiv;
+  }
+
+  let html = divisionChips(S.rankDiv, 'rankDiv');
+  if (!S.ranks.length) return html + `<div class="empty">No clubs to rank yet.</div>`;
+
+  // Divisions never play each other, so one list of every club would put teams
+  // with no common opponents in the same column. Same reason the stats tables
+  // block by division.
+  html += S.rankDiv
+    ? rankTable(S.ranks)
+    : ['Open', "Women's", 'Mixed'].map((div) => {
+        const rows = S.ranks.filter((t) => t.division === div);
+        if (!rows.length) return '';
+        return `<button class="dayhead" onclick="S.rankDiv='${div.replace(/'/g, "\\'")}';render()">
+            <span class="dh-l">${esc(div)}</span>
+            <span class="dh-n">${rows.length} clubs</span>
+            <span class="dh-c">›</span></button>` + rankTable(rows.slice(0, 12));
+      }).join('');
+
+  return html + `<div class="mnote">The rating is Glicko. Every club starts from its WFDF seed
+    and moves on every result — beating a club the model rates above you is worth more than
+    beating one below. <b>rd</b> is how unsure the model still is: it starts wide and narrows
+    with each game, so a club it has barely seen has a rating that is still mostly the seed it
+    was handed. Those rows are greyed and marked provisional, because they are not really
+    ranked yet — the position is the seeder's opinion, not the model's.</div>`;
+}
+
+function rankTable(rows) {
+  return `<div class="rail-card">${rows.map((t) => `<div class="rl ${t.provisional ? 'thin' : ''}">
+    <span class="rl-rk">${t.position}</span>
+    <span class="rl-main">
+      <span class="rl-name">${teamLink({ id: t.teamId, name: t.name })}
+        <span class="ctry">${esc(t.country || '')}</span></span>
+      <span class="rl-sub">${seedLine(t)}</span>
+    </span>
+    <span class="rl-val">${t.rating}</span>
+  </div>`).join('')}</div>`;
+}
+
+// The seed comparison, which is the interesting column. Movement is coloured
+// up/down — not as praise, but because "the tournament has disagreed with the
+// seeding in your favour" is genuinely the good direction to be moving, and an
+// unsigned number here reads as noise.
+function seedLine(t) {
+  const played = `${t.played} game${t.played === 1 ? '' : 's'}`;
+  if (t.provisional) {
+    return `${t.seed ? `seed ${t.seed} · ` : ''}${played} · provisional, ±${t.rd}`;
+  }
+  if (!t.seed) return `unseeded · ${ordinal(t.position)} · ${played}`;
+  const d = t.seedDelta;
+  // Kept short because .rl-sub is one ellipsised line and the games count, on
+  // the right of it, is what falls off the end when the wording runs long.
+  const move = d > 0 ? `<span style="color:var(--up)">up ${d}</span>`
+    : d < 0 ? `<span style="color:var(--down)">down ${-d}</span>`
+    : 'as seeded';
+  return `seed ${t.seed} &rarr; ${ordinal(t.position)} · ${move} · ${played}`;
 }
 
 // --- live -------------------------------------------------------------------
@@ -1253,16 +1219,15 @@ function renderLive() {
         See upcoming games</button></div></div>`;
   }
   return `<div class="livenote"><strong>These games have already started.</strong>
-    You're betting on the score as it stands, and the price moves with every point.
-    Betting pauses for a few seconds after each score — we hear about it slightly late,
-    and whoever's pitch-side doesn't.</div>` +
+    The percentages are the model's, recalculated from the score and how much of the game
+    is left, so they swing hard late in a close one. Scores reach us a few seconds after
+    they reach whoever is pitch-side.</div>` +
     S.live.map(liveCard).join('');
 }
 
 function liveCard(g) {
   // Decided beats suspended: once the score is at the target the game is over,
-  // and nothing about it is bettable again.
-  const suspended = g.decided || g.suspendedFor > 0;
+  // whatever the feed is still doing between points.
   const state = g.decided ? 'FINAL' : g.suspendedFor > 0 ? `PAUSED ${g.suspendedFor}s` : 'LIVE';
   return `<div class="game live"${g.decided ? ' style="opacity:.72"' : ''}>
     <div class="meta">
@@ -1274,135 +1239,24 @@ function liveCard(g) {
         : g.suspendedFor > 0 ? 'var(--down)' : 'var(--up)'}">${state}</span>
     </div>
     <div class="livescore">
+      <!-- Plain text, not a link: each club is already named again in the panel
+           below, and two dotted underlines on the same word in one card reads as
+           two different destinations. One tap target per club per card. -->
       <span class="ls-n">${esc(g.home.name)}</span>
       <span class="ls-s">${g.score.home}<span class="ls-d">–</span>${g.score.away}</span>
       <span class="ls-n" style="text-align:right">${esc(g.away.name)}</span>
     </div>
     <div class="winbar"><span style="width:${Math.round(g.home.prob * 100)}%"></span></div>
     <div class="winpct">
-      <span>${Math.round(g.home.prob * 100)}%</span>
-      <span>${Math.round(g.away.prob * 100)}%</span>
+      <span>${winPct(g.home.prob)}</span>
+      <span>${winPct(g.away.prob)}</span>
     </div>
     <div class="sides" style="margin-top:9px">
-      ${liveBtn(g, 'home', suspended)}${liveBtn(g, 'away', suspended)}
+      ${sidePanel(g, 'home')}${sidePanel(g, 'away')}
     </div>
     ${g.decided ? `<div style="font-size:11px;color:var(--dim);margin:7px 4px 0">
-      Result stands — waiting on the official confirmation to settle.</div>` : ''}
+      Result stands — waiting on the official confirmation.</div>` : ''}
   </div>`;
-}
-
-function liveBtn(g, side, suspended) {
-  const t = g[side];
-  // Server-priced, like every other market. Never recompute odds here: the
-  // browser doesn't apply the 1.02 floor and would show prices below evens.
-  const odds = typeof t.decimal === 'number' ? t.decimal : null;
-  const on = S.sel && String(S.sel.gameId) === String(g.id) && S.sel.side === side;
-  return `<button class="side ${on ? 'sel' : ''}" ${suspended ? 'disabled style="opacity:.45"' : ''}
-      onclick="${suspended ? '' : `pickLive(${g.id},'${side}')`}">
-    <span class="nm"><div class="n1">${esc(t.name)}</div>
-      <div class="n2">${esc(t.country || '')}${t.seed ? ' · #' + t.seed : ''}</div></span>
-    <span class="od">${odds ? odds.toFixed(2) : '—'}</span></button>`;
-}
-
-function pickLive(gameId, side) {
-  if (!S.user) return openAuth('signup');
-  const g = S.live.find(x => String(x.id) === String(gameId));
-  if (!g) return;
-  const odds = g[side].decimal;
-  if (typeof odds !== 'number') return;
-  S.sel = { gameId, side, market: 'moneyline', line: null,
-            name: `${g[side].name} (live ${g.score.home}–${g.score.away})`, odds, stake: 500 };
-  $('#view').innerHTML = renderLive();
-  renderSlip();
-}
-
-// --- one game, and who backed what -----------------------------------------
-async function openGame(id) {
-  $('#modal').innerHTML = `<div class="modal"><div class="sheet">
-    <p class="lede">Loading…</p></div></div>`;
-  try {
-    const d = await api('/game/' + id);
-    const g = d.game;
-    const rows = d.bets.map(b => `<div class="r">
-      <span class="nm">${esc(b.display_name)}
-        <div class="sub">${b.side === 'home' ? esc(g.home.name) : esc(g.away.name)}
-          @ ${Number(b.odds).toFixed(2)}</div></span>
-      <span class="v ${b.status === 'won' ? '' : ''}"
-        style="color:${b.status === 'won' ? 'var(--up)' : b.status === 'lost' ? 'var(--down)' : 'var(--text)'}">
-        ${money(b.stake)}</span></div>`).join('');
-
-    $('#modal').innerHTML = `<div class="modal"><div class="sheet">
-      <h2 style="font-size:17px">${esc(g.home.name)} v ${esc(g.away.name)}</h2>
-      <p class="lede">${esc(g.division || '')}${g.poolName ? ' · ' + esc(g.poolName) : ''}
-        · ${fmtTime(g.startsAt)} · ${fmtIrish(g.startsAt)} Limerick</p>
-      <div class="lb" style="margin-bottom:12px">
-        <div class="r"><span class="nm">${esc(g.home.name)}</span>
-          <span class="v">${g.home.decimal.toFixed(2)}</span></div>
-        <div class="r"><span class="nm">${esc(g.away.name)}</span>
-          <span class="v">${g.away.decimal.toFixed(2)}</span></div>
-      </div>
-      ${d.revealed
-        ? (rows
-            ? `<div style="font-size:11px;text-transform:uppercase;letter-spacing:.1em;
-                 color:var(--dim);margin:0 4px 8px;font-weight:700">Who backed what</div>
-               <div class="lb">${rows}</div>`
-            : `<div class="empty" style="padding:24px">Nobody bet on this one.</div>`)
-        : `<div class="empty" style="padding:24px">Bets are hidden until this game starts.<br>
-             <span style="font-size:12px">${d.bets.length === 0 ? '' : ''}They'll be public at
-             ${fmtTime(g.startsAt)}.</span></div>`}
-      <div class="note"><button onclick="$('#modal').innerHTML=''" style="color:var(--dim)">Close</button></div>
-    </div></div>`;
-  } catch (e) {
-    $('#modal').innerHTML = `<div class="modal"><div class="sheet">
-      <p class="lede">${esc(e.message)}</p>
-      <button class="btn" onclick="$('#modal').innerHTML=''">Close</button></div></div>`;
-  }
-}
-
-// --- account ---------------------------------------------------------------
-function renderAccount() {
-  const u = S.user;
-  return `
-    <div class="lb" style="margin-bottom:14px">
-      <div class="r"><span class="nm">Name<div class="sub">Shown on the leaderboard</div></span>
-        <span class="v">${esc(u.displayName)}</span></div>
-      <div class="r"><span class="nm">Bucks<div class="sub">Play money. No real value.</div></span>
-        <span class="v">${money(u.bankroll)}</span></div>
-      <div class="r"><span class="nm">Recovery email
-        <div class="sub">Only ever used to reissue a lost code. Never shown publicly.</div></span>
-        <span class="v" style="color:${u.hasRecoveryEmail ? 'var(--up)' : 'var(--dim)'}">
-          ${u.hasRecoveryEmail ? 'set' : 'none'}</span></div>
-    </div>
-
-    <div class="adm">
-      <div style="font-weight:650;font-size:14px">Recovery email</div>
-      <div class="sub" style="margin-top:3px">Leave blank and save to remove it entirely.</div>
-      <div class="in"><input id="acem" type="email" style="width:100%;text-align:left"
-        placeholder="you@example.com"><button class="btn" onclick="saveAccountEmail()">Save</button></div>
-    </div>
-
-    <div class="adm">
-      <div style="font-weight:650;font-size:14px">New recovery code</div>
-      <div class="sub" style="margin-top:3px">Use this if your code has been shared or screenshotted.
-        The old one stops working immediately. You'll stay signed in here.</div>
-      <div class="in"><button class="btn ghost" onclick="rotateCode()">Generate a new code</button></div>
-    </div>`;
-}
-
-async function saveAccountEmail() {
-  try {
-    const r = await api('/email', { body: { email: $('#acem').value.trim() } });
-    S.user.hasRecoveryEmail = !r.removed;
-    toast(r.removed ? 'Email removed.' : 'Email saved.');
-    render();
-  } catch (e) { toast(e.message); }
-}
-
-async function rotateCode() {
-  try {
-    const r = await api('/regenerate-code', { method: 'POST' });
-    showCode(r.recoveryCode, S.user, false);
-  } catch (e) { toast(e.message); }
 }
 
 // --- admin -----------------------------------------------------------------
@@ -1414,7 +1268,7 @@ async function renderAdmin() {
     <div style="font-size:13.5px;font-weight:600">${esc(g.home_name || g.home_label || '?')}
       <span style="color:var(--dim)">v</span> ${esc(g.away_name || g.away_label || '?')}</div>
     <div class="sub" style="margin-top:3px">${esc(g.division || '')} · ${esc(g.pool_name || '')}
-      · ${fmtIrish(g.starts_at)} Limerick · ${g.bet_count} bet${g.bet_count === 1 ? '' : 's'}</div>
+      · ${fmtIrish(g.starts_at)} Limerick</div>
     ${g.needs_review ? `<div style="color:var(--down);font-size:11.5px;margin-top:5px;font-weight:600">
       ⚑ ${esc(g.needs_review)}</div>` : ''}
     <div class="in">
@@ -1441,7 +1295,7 @@ async function voidGame(id) {
   if (reason === null) return;
   try {
     await api('/admin/void', { body: { gameId: id, reason } });
-    toast('Voided and refunded.'); render();
+    toast('Voided.'); render();
   } catch (e) { toast(e.message); }
 }
 
@@ -1455,54 +1309,42 @@ async function runSync() {
 }
 
 // --- auth ------------------------------------------------------------------
-function openAuth(mode) {
+// Sign-up is gone: there is no account a visitor could want any more. What is
+// left is the one that settles games, so the form asks for a name and a code
+// and says nothing about joining.
+function openLogin() {
   $('#modal').innerHTML = `<div class="modal">
     <div class="sheet">
-      <h2>${mode === 'signup' ? 'Join Chalk Line' : 'Welcome back'}</h2>
-      <p class="lede">${mode === 'signup'
-        ? "No email needed. Pick a name, we'll give you a code to get back in, and you start with 10,000 bucks."
-        : 'Enter the name and code you were given.'}</p>
+      <h2>Sign in</h2>
+      <p class="lede">Chalk Line has no public accounts. This is for whoever is keeping the
+        scores straight.</p>
 
       <label>Display name</label>
-      <input id="dn" autocomplete="nickname" maxlength="24"
-        placeholder="${mode === 'signup' ? 'Shown on the leaderboard' : ''}">
+      <input id="dn" autocomplete="nickname" maxlength="24">
 
-      ${mode === 'signup' ? `
-        <label>Email <span style="text-transform:none;letter-spacing:0;color:var(--dim);font-weight:500">— optional, only to recover a lost code</span></label>
-        <input id="em" type="email" autocomplete="email" placeholder="Leave blank if you'd rather not">
-      ` : `
-        <label>Recovery code</label>
-        <input id="rc" autocomplete="one-time-code" placeholder="heron-cobalt-willow"
-          autocapitalize="off" autocorrect="off" spellcheck="false">
-      `}
+      <label>Recovery code</label>
+      <input id="rc" autocomplete="one-time-code" placeholder="heron-cobalt-willow"
+        autocapitalize="off" autocorrect="off" spellcheck="false">
 
       <div class="err hide" id="ae"></div>
-      <button class="btn" id="ab" onclick="submitAuth('${mode}')">
-        ${mode === 'signup' ? 'Create account' : 'Sign in'}</button>
+      <button class="btn" id="ab" onclick="submitLogin()">Sign in</button>
 
-      <div class="switch">${mode === 'signup'
-        ? `Already playing? <button onclick="openAuth('login')">Sign in</button>`
-        : `New here? <button onclick="openAuth('signup')">Create an account</button>
-           <br><button onclick="openAuth('recover')" style="margin-top:8px">Lost your code?</button>`}</div>
-
-      ${mode === 'signup' ? `<div class="note">By joining you confirm you're 18 or over and understand
-        this is a play-money game with no prizes.</div>` : ''}
+      <div class="switch"><button onclick="openRecover()">Lost your code?</button></div>
       <div class="note"><button onclick="$('#modal').innerHTML=''" style="color:var(--dim)">Close</button></div>
     </div></div>`;
-  if (mode === 'recover') return openRecover();
   setTimeout(() => $('#dn')?.focus(), 60);
 }
 
 function openRecover() {
   $('#modal').innerHTML = `<div class="modal"><div class="sheet">
     <h2>Lost your code?</h2>
-    <p class="lede">If you added an email when you signed up, we'll send a new code to it.
-      Your old code stops working once the new one arrives. If you didn't add an email,
+    <p class="lede">If there is an email on the account, we'll send a new code to it.
+      The old code stops working once the new one arrives. If there is no email,
       there's no way back into that account — codes aren't stored anywhere.</p>
     <label>Email</label><input id="rem" type="email" autocomplete="email">
     <div class="err hide" id="ae"></div>
     <button class="btn" id="ab" onclick="submitRecover()">Send me a new code</button>
-    <div class="switch"><button onclick="openAuth('login')">Back to sign in</button></div>
+    <div class="switch"><button onclick="openLogin()">Back to sign in</button></div>
   </div></div>`;
   setTimeout(() => $('#rem')?.focus(), 60);
 }
@@ -1514,57 +1356,22 @@ async function submitRecover() {
     const r = await api('/recover', { body: { email: $('#rem').value.trim() } });
     $('.sheet').innerHTML = `<h2>Check your email</h2>
       <p class="lede">${esc(r.message)}</p>
-      <button class="btn" onclick="openAuth('login')">Sign in</button>`;
+      <button class="btn" onclick="openLogin()">Sign in</button>`;
   } catch (e) {
     err.textContent = e.message; err.classList.remove('hide'); btn.disabled = false;
   }
 }
 
-// The code is shown exactly once. Make that impossible to miss.
-function showCode(code, user, recoveryByEmail) {
-  $('#modal').innerHTML = `<div class="modal"><div class="sheet">
-    <h2>Save this code</h2>
-    <p class="lede">This is the only way back into your account, and it's shown once.
-      Screenshot it or put it somewhere safe.</p>
-    <div style="background:var(--bg);border:1px solid var(--chalk);border-radius:10px;
-      padding:16px;text-align:center;font-size:17px;font-weight:800;letter-spacing:.02em;
-      font-family:ui-monospace,monospace;word-break:break-all" id="thecode">${esc(code)}</div>
-    <button class="btn ghost" style="width:100%;margin-top:10px" onclick="copyCode('${esc(code)}')">Copy code</button>
-    ${recoveryByEmail && !user.hasRecoveryEmail ? `
-      <label style="margin-top:18px">Add an email to recover it later — optional</label>
-      <input id="addem" type="email" placeholder="you@example.com">
-      <button class="btn ghost" style="width:100%;margin-top:8px" onclick="attachEmail()">Save email</button>
-    ` : ''}
-    <button class="btn" onclick="$('#modal').innerHTML=''">I've saved it — start betting</button>
-  </div></div>`;
-}
-
-function copyCode(code) {
-  navigator.clipboard?.writeText(code).then(() => toast('Code copied'),
-    () => toast('Select and copy it manually'));
-}
-
-async function attachEmail() {
-  try {
-    await api('/email', { body: { email: $('#addem').value.trim() } });
-    S.user.hasRecoveryEmail = true;
-    toast('Email saved — you can recover your code with it.');
-  } catch (e) { toast(e.message); }
-}
-
-async function submitAuth(mode) {
+async function submitLogin() {
   const btn = $('#ab'); btn.disabled = true;
   const err = $('#ae'); err.classList.add('hide');
   try {
-    const body = { displayName: $('#dn').value.trim() };
-    if (mode === 'signup') body.email = $('#em').value.trim() || undefined;
-    else body.recoveryCode = $('#rc').value.trim();
-
-    const r = await api('/' + (mode === 'signup' ? 'signup' : 'login'), { body });
+    const r = await api('/login', { body: {
+      displayName: $('#dn').value.trim(), recoveryCode: $('#rc').value.trim() } });
     S.user = r.user;
+    $('#modal').innerHTML = '';
     renderChrome(); render();
-    if (mode === 'signup') showCode(r.recoveryCode, r.user, r.recoveryByEmail);
-    else { $('#modal').innerHTML = ''; toast(`Welcome back — ${money(S.user.bankroll)} bucks`); }
+    toast(`Signed in as ${S.user.displayName}`);
   } catch (e) {
     err.textContent = e.message; err.classList.remove('hide'); btn.disabled = false;
   }
@@ -1575,12 +1382,11 @@ async function render() {
   const v = $('#view');
   try {
     if (S.tab === 'board') { await loadGames(); v.innerHTML = renderBoard(); tick(); }
-    else if (S.tab === 'bets') v.innerHTML = await renderBets();
-    else if (S.tab === 'leaders') v.innerHTML = await renderLeaders();
+    else if (S.tab === 'results') v.innerHTML = await renderResults();
+    else if (S.tab === 'rankings') v.innerHTML = await renderRankings();
     else if (S.tab === 'stats') v.innerHTML = await renderStats();
     else if (S.tab === 'team') v.innerHTML = await renderTeam();
     else if (S.tab === 'admin') v.innerHTML = await renderAdmin();
-    else if (S.tab === 'account') v.innerHTML = renderAccount();
     else if (S.tab === 'live') { await loadLive(); v.innerHTML = renderLive(); }
   } catch (e) {
     v.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
@@ -1589,25 +1395,36 @@ async function render() {
 
 (async function init() {
   try { S.user = (await api('/me')).user; } catch {}
+
+  // Which tab you land on depends on whether anything is actually in play, and
+  // /games answers that in the same breath as the fixtures — so the board is
+  // fetched before the first paint rather than defaulting to Upcoming and
+  // discovering the live games a beat later. A game in progress is the only
+  // thing here that won't still be here in an hour, so it wins the landing.
+  let boarded = false;
+  try { await loadGames(); boarded = true; } catch {}
+  S.tab = S.liveCount > 0 ? 'live' : 'board';
   renderChrome();
-  await render();
+  if (S.tab === 'board' && boarded) { $('#view').innerHTML = renderBoard(); tick(); }
+  else await render();
+
   // Polling is the thing that scales with the number of people watching, so
   // it only runs while the tab is actually in front of someone. A phone in a
   // pocket at the fields costs nothing.
   const visible = () => document.visibilityState === 'visible';
   setInterval(() => {
-    if (visible() && S.tab === 'board' && !S.sel && !S.query) render();
+    if (visible() && S.tab === 'board' && !S.query) render();
   }, 60000);
   // The live board is only useful if it's actually live; the feed's own cache
   // is ten seconds, so there's nothing to gain by going faster.
   setInterval(async () => {
     if (!visible()) return;
-    if (S.tab === 'live') { await loadLive(); if (!S.sel) $('#view').innerHTML = renderLive(); }
+    if (S.tab === 'live') { await loadLive(); $('#view').innerHTML = renderLive(); }
     else { try { const d = await api('/live'); S.liveCount = (d.games || []).length; renderChrome(); }
            catch {} }
   }, 12000);
   document.addEventListener('visibilitychange', () => {
-    if (visible() && S.tab === 'board' && !S.sel) render();
+    if (visible() && S.tab === 'board') render();
   });
 })();
 </script>

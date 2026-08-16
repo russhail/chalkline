@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { createStore } from '../lib/store.js';
 import { handle, COOKIE, parseCookies } from '../lib/router.js';
 import { sync } from '../lib/sync.js';
+import * as auth from '../lib/auth.js';
 import { placeBet } from '../lib/betting.js';
 
 const NOW = Date.parse('2026-08-16T10:00:00Z');
@@ -26,14 +27,19 @@ const cookieFrom = (res) => {
   const raw = res.headers?.['Set-Cookie'];
   return raw ? `${COOKIE}=${parseCookies(raw.split(';')[0])[COOKIE]}` : null;
 };
+
+// Nobody can open an account over HTTP any more, so an attacker's starting
+// point is a session on an account that already exists. The row is created
+// through lib/auth.js and the session through the one route that still issues
+// them, which is exactly the state the router will meet in production.
 let ipSeq = 0;
-const signUp = async (displayName = 'Russ', extra = {}) => {
-  // A fresh source address per signup, so the rate limiter doesn't interfere
-  // with tests that are about something else.
+const account = async (displayName = 'Russ', { ip } = {}) => {
   ipSeq += 1;
-  const res = await call('POST', '/api/signup',
-    { body: { displayName, ...extra }, ip: `10.1.0.${ipSeq}` });
-  return { res, cookie: cookieFrom(res) };
+  const made = await auth.createUser(store, { displayName, now: NOW });
+  assert.ok(made.ok, `fixture account "${displayName}": ${made.errors?.join(' ')}`);
+  const res = await call('POST', '/api/login',
+    { body: { displayName, recoveryCode: made.recoveryCode }, ip: ip ?? `10.1.0.${ipSeq}` });
+  return { userId: made.userId, code: made.recoveryCode, cookie: cookieFrom(res) };
 };
 
 beforeEach(async () => {
@@ -43,94 +49,11 @@ beforeEach(async () => {
     heartbeat: { cacheVersion: 'v1' }, teams: TEAMS, fieldSizes: { Open: 48 }, games: GAMES }) });
 });
 
-// 1 — privilege escalation via the signup payload
-test('you cannot make yourself an admin by asking nicely', async () => {
-  const { res } = await signUp('Sneaky', { isAdmin: true, is_admin: true, bankroll: 999999 });
-  assert.equal(res.body.user.isAdmin, false);
-  assert.equal(res.body.user.bankroll, 10000, 'bankroll must not be settable at signup');
-});
-
-// 2 — bankroll injection on a bet
-test('you cannot top yourself up through the bet endpoint', async () => {
-  const { cookie } = await signUp();
-  await call('POST', '/api/bet',
-    { body: { gameId: 1, side: 'home', stake: 100, bankroll: 1e9, payout: 1e9 }, cookie });
-  const me = await call('GET', '/api/me', { cookie });
-  assert.equal(me.body.user.bankroll, 9900);
-});
-
-// 3 — hostile stakes
-test('negative, zero, NaN and infinite stakes are all refused', async () => {
-  const { cookie } = await signUp();
-  for (const stake of [-1000, -0.01, 0, NaN, Infinity, -Infinity, '1e309', 'abc', null]) {
-    const res = await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake }, cookie });
-    assert.equal(res.status, 400, `stake ${stake} should be refused`);
-  }
-  const me = await call('GET', '/api/me', { cookie });
-  assert.equal(me.body.user.bankroll, 10000, 'no failed bet may move the bankroll');
-});
-
-// 4 — a bet bigger than the bankroll, and the classic off-by-one
-test('you can stake your whole roll but not a penny more', async () => {
-  const { cookie } = await signUp();
-  const over = await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 10000.01 }, cookie });
-  assert.equal(over.status, 400);
-  const exact = await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 10000 }, cookie });
-  assert.equal(exact.status, 200);
-  const me = await call('GET', '/api/me', { cookie });
-  assert.equal(me.body.user.bankroll, 0);
-});
-
-// 5 — concurrent bets must not double-spend
-test('two bets racing on one account cannot overdraw it', async () => {
-  const { cookie } = await signUp();
-  const results = await Promise.all(Array.from({ length: 6 }, () =>
-    call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 4000 }, cookie })));
-  const accepted = results.filter((r) => r.status === 200).length;
-  assert.ok(accepted <= 2, `only 2 x 4000 fits in 10000, ${accepted} were accepted`);
-  const me = await call('GET', '/api/me', { cookie });
-  assert.ok(me.body.user.bankroll >= 0, `bankroll went negative: ${me.body.user.bankroll}`);
-});
-
-// 6 — a bad side value
-test('an unrecognised side is refused', async () => {
-  const { cookie } = await signUp();
-  for (const side of ['draw', 'HOME', '', null, { $ne: null }]) {
-    const res = await call('POST', '/api/bet', { body: { gameId: 1, side, stake: 100 }, cookie });
-    assert.equal(res.status, 400, `side ${JSON.stringify(side)} should be refused`);
-  }
-});
-
-// 7 — betting on a game that does not exist
-test('a nonexistent or nonsense game id is handled, not crashed on', async () => {
-  const { cookie } = await signUp();
-  for (const gameId of [999999, -1, 0, 'abc', null]) {
-    const res = await call('POST', '/api/bet', { body: { gameId, side: 'home', stake: 100 }, cookie });
-    assert.ok(res.status === 400 || res.status === 404, `game ${gameId} gave ${res.status}`);
-  }
-});
-
-// 8 — SQL injection through a display name
-test('a display name cannot carry SQL into the database', async () => {
-  const nasty = "'; DROP TABLE users; --";
-  await call('POST', '/api/signup', { body: { displayName: nasty } });
-  const rows = await store.query('SELECT COUNT(*) AS n FROM users');
-  assert.ok(Number(rows[0].n) >= 0, 'the users table still exists');
-});
-
-// 9 — script injection through a display name
-test('a display name cannot contain markup at all', async () => {
-  for (const name of ['<img src=x onerror=alert(1)>', '<script>alert(1)</script>', 'a"onmouseover="x']) {
-    const res = await call('POST', '/api/signup', { body: { displayName: name } });
-    assert.equal(res.status, 400, `"${name}" should be refused outright`);
-  }
-});
-
-// 10 — session tokens must be unguessable and unique
+// 1 — session tokens must be unguessable and unique
 test('session tokens are long, random and never repeat', async () => {
   const seen = new Set();
   for (let i = 0; i < 12; i += 1) {
-    const { cookie } = await signUp(`User${i}`);
+    const { cookie } = await account(`User${i}`);
     const tok = cookie.split('=')[1];
     assert.ok(tok.length >= 32, `token too short: ${tok.length}`);
     assert.ok(!seen.has(tok), 'token collision');
@@ -138,83 +61,58 @@ test('session tokens are long, random and never repeat', async () => {
   }
 });
 
-// 11 — a forged session token gets you nothing
+// 2 — a forged session token gets you nothing
 test('a made-up session cookie is not a session', async () => {
-  await signUp();
-  const res = await call('GET', '/api/me', { cookie: `${COOKIE}=totally-made-up-token` });
-  assert.equal(res.body.user, null);
-  const bet = await call('POST', '/api/bet',
-    { body: { gameId: 1, side: 'home', stake: 100 }, cookie: `${COOKIE}=nope` });
-  assert.equal(bet.status, 401);
+  await account();
+  const me = await call('GET', '/api/me', { cookie: `${COOKIE}=totally-made-up-token` });
+  assert.equal(me.body.user, null);
+  // Not merely anonymous, either: a forged cookie must fall at the same door as
+  // no cookie at all on everything a real session would have opened.
+  const admin = await call('GET', '/api/admin/games', { cookie: `${COOKIE}=nope` });
+  assert.equal(admin.status, 401);
+  const rotate = await call('POST', '/api/regenerate-code', { cookie: `${COOKIE}=nope` });
+  assert.equal(rotate.status, 401);
 });
 
-// 12 — one player cannot act as another
-test('you cannot place a bet on someone else’s account', async () => {
-  await signUp('Victim');
-  const attacker = await signUp('Attacker');
-  await call('POST', '/api/bet',
-    { body: { gameId: 1, side: 'home', stake: 500, userId: 1, user_id: 1 }, cookie: attacker.cookie });
-  const [victim] = await store.query('SELECT bankroll FROM users WHERE display_name = $1', ['Victim']);
-  assert.equal(victim.bankroll, 10000, "the victim's bankroll must be untouched");
-});
-
-// 13 — money is conserved across a settlement
+// 3 — money is conserved across a settlement
 test('settlement neither creates nor destroys units beyond the stated payout', async () => {
-  const a = await signUp('Ana'); const b = await signUp('Bob');
-  const betA = await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 3000 }, cookie: a.cookie });
-  const betB = await call('POST', '/api/bet', { body: { gameId: 1, side: 'away', stake: 3000 }, cookie: b.cookie });
+  const ana = await account('Ana');
+  const bob = await account('Bob');
+  const betA = await placeBet(store,
+    { userId: ana.userId, gameId: 1, side: 'home', stake: 3000, clock: () => NOW });
+  const betB = await placeBet(store,
+    { userId: bob.userId, gameId: 1, side: 'away', stake: 3000, clock: () => NOW });
   await store.query('UPDATE users SET is_admin = TRUE WHERE display_name = $1', ['Ana']);
-  await call('POST', '/api/admin/settle', { body: { gameId: 1, homeScore: 15, awayScore: 9 }, cookie: a.cookie });
+  await call('POST', '/api/admin/settle',
+    { body: { gameId: 1, homeScore: 15, awayScore: 9 }, cookie: ana.cookie });
 
   const rows = await store.query('SELECT display_name, bankroll FROM users ORDER BY display_name');
   const byName = Object.fromEntries(rows.map((r) => [r.display_name, r.bankroll]));
-  assert.equal(byName.Ana, Math.round((7000 + 3000 * betA.body.bet.odds) * 100) / 100);
+  assert.equal(byName.Ana, Math.round((7000 + 3000 * betA.odds) * 100) / 100);
   assert.equal(byName.Bob, 7000, 'the loser is down exactly their stake, no more');
-  assert.ok(betB.body.bet.odds > 1);
+  assert.ok(betB.odds > 1);
   const ledger = await store.query('SELECT SUM(amount) AS net FROM ledger');
   assert.ok(Number.isFinite(Number(ledger[0].net)), 'the ledger must stay coherent');
 });
 
-// 14 — repeated small bets must not drift the bankroll through float error
-test('a hundred small bets leave the bankroll exactly where the arithmetic says', async () => {
-  const { cookie } = await signUp();
-  let expected = 10000;
-  for (let i = 0; i < 100; i += 1) {
-    const res = await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 10 }, cookie });
-    if (res.status === 200) expected -= 10;
-  }
-  const me = await call('GET', '/api/me', { cookie });
-  assert.equal(me.body.user.bankroll, expected);
+// 4 — the published price is not for sale
+test('a stake on the books cannot bend the price the board publishes', async () => {
+  const { userId } = await account();
+  const before = (await call('GET', '/api/games')).body.games[0];
+  await placeBet(store, { userId, gameId: 1, side: 'home', stake: 10000, clock: () => NOW });
+  const after = (await call('GET', '/api/games')).body.games[0];
+
+  // The board is priced from the model alone — no stakes are handed to the
+  // pricing call any more — so a whole bankroll landing on one side must leave
+  // the published number exactly where it was.
+  assert.deepEqual(after.home, before.home);
+  assert.deepEqual(after.away, before.away);
+  assert.equal(Math.round((after.home.prob + after.away.prob) * 1e6) / 1e6, 1,
+    'two true probabilities, with no margin taken out between them');
+  assert.ok(after.home.prob > 0 && after.home.prob < 1);
 });
 
-// 15 — odds must always be payable and sane
-test('odds never go below evens for the underdog or below 1 for anyone', async () => {
-  const { cookie } = await signUp();
-  await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 10000 }, cookie });
-  const board = await call('GET', '/api/games');
-  const g = board.body.games[0];
-  assert.ok(g.home.odds > 1, `home odds ${g.home.odds} must exceed 1`);
-  assert.ok(g.away.odds > 1, `away odds ${g.away.odds} must exceed 1`);
-  assert.ok(Number.isFinite(g.home.odds) && Number.isFinite(g.away.odds));
-});
-
-// 16 — a duplicate display name in different case
-test('names are unique case-insensitively, so nobody can impersonate by casing', async () => {
-  await signUp('Anaximander23');
-  for (const variant of ['anaximander23', 'ANAXIMANDER23', 'AnAxImAnDeR23']) {
-    const res = await call('POST', '/api/signup', { body: { displayName: variant } });
-    assert.equal(res.status, 400, `"${variant}" should collide`);
-  }
-});
-
-// 17 — whitespace tricks in names
-test('padding and doubled spaces cannot fake a distinct name', async () => {
-  await signUp('Russ Hailwood');
-  const res = await call('POST', '/api/signup', { body: { displayName: '  Russ   Hailwood  ' } });
-  assert.equal(res.status, 400, 'collapsed whitespace should collide');
-});
-
-// 18 — the board must not be expensive
+// 5 — the board must not be expensive
 test('the board answers in reasonable time with a full slate', async () => {
   const many = Array.from({ length: 400 }, (_, i) => ({
     ...GAMES[0], id: 100 + i, startsAt: '2026-08-16T18:00:00Z',
@@ -229,49 +127,37 @@ test('the board answers in reasonable time with a full slate', async () => {
   assert.ok(ms < 2000, `board took ${ms}ms with ${res.body.games.length} games`);
 });
 
-// 19 — a huge request body must not take the site down
-test('an absurd payload is rejected rather than processed', async () => {
-  const { cookie } = await signUp();
-  const res = await call('POST', '/api/signup', { body: { displayName: 'x'.repeat(100000) } });
-  assert.equal(res.status, 400);
-});
-
-// 20 — logging out one device must not log out the other
+// 6 — logging out one device must not log out the other
 test('signing out on one device leaves your other session alone', async () => {
-  const { cookie } = await signUp();
-  const second = await call('POST', '/api/login',
-    { body: { displayName: 'Russ', recoveryCode: 'wrong' } });
-  assert.equal(second.status, 401);
-  await call('POST', '/api/logout', { cookie });
-  const me = await call('GET', '/api/me', { cookie });
-  assert.equal(me.body.user, null);
+  const phone = await account('Russ');
+  const laptop = cookieFrom(await call('POST', '/api/login',
+    { body: { displayName: 'Russ', recoveryCode: phone.code } }));
+  assert.ok(laptop && laptop !== phone.cookie, 'two sign-ins are two separate sessions');
+
+  await call('POST', '/api/logout', { cookie: phone.cookie });
+  assert.equal((await call('GET', '/api/me', { cookie: phone.cookie })).body.user, null);
+  const still = await call('GET', '/api/me', { cookie: laptop });
+  assert.equal(still.body.user.displayName, 'Russ', 'the other device stays signed in');
 });
 
 // --- rate limiting ----------------------------------------------------------
 
-test('signup is capped per source address', async () => {
-  const ip = '203.0.113.7';
-  const codes = [];
-  for (let i = 0; i < 8; i += 1) {
-    const res = await call('POST', '/api/signup', { body: { displayName: `Bot${i}` }, ip });
-    codes.push(res.status);
-  }
-  assert.equal(codes.filter((c) => c === 200).length, 5, 'five allowed');
-  assert.ok(codes.slice(5).every((c) => c === 429), 'the rest are refused');
-});
-
 test('a different address is unaffected by someone else hitting the cap', async () => {
   const ip = '203.0.113.8';
-  for (let i = 0; i < 6; i += 1) {
-    await call('POST', '/api/signup', { body: { displayName: `Spam${i}` }, ip });
+  for (let i = 0; i < 3; i += 1) {
+    const res = await call('POST', '/api/recover', { body: { email: 'nell@example.com' }, ip });
+    assert.notEqual(res.status, 429, `request ${i + 1} is within the hourly allowance`);
   }
-  const other = await call('POST', '/api/signup',
-    { body: { displayName: 'Innocent' }, ip: '203.0.113.9' });
-  assert.equal(other.status, 200);
+  const capped = await call('POST', '/api/recover', { body: { email: 'nell@example.com' }, ip });
+  assert.equal(capped.status, 429);
+
+  const other = await call('POST', '/api/recover',
+    { body: { email: 'nell@example.com' }, ip: '203.0.113.9' });
+  assert.notEqual(other.status, 429, 'a second address starts on a counter of its own');
 });
 
 test('brute-forcing a recovery code gets locked out', async () => {
-  await signUp('Target');
+  await account('Target', { ip: '10.9.9.1' });
   const ip = '198.51.100.4';
   let refused = 0;
   for (let i = 0; i < 14; i += 1) {
@@ -283,10 +169,7 @@ test('brute-forcing a recovery code gets locked out', async () => {
 });
 
 test('an attacker cannot lock a victim out by hammering their name', async () => {
-  const { code } = await (async () => {
-    const r = await call('POST', '/api/signup', { body: { displayName: 'Victim' }, ip: '10.9.9.9' });
-    return { code: r.body.recoveryCode };
-  })();
+  const { code } = await account('Victim', { ip: '10.9.9.9' });
   for (let i = 0; i < 12; i += 1) {
     await call('POST', '/api/login',
       { body: { displayName: 'Victim', recoveryCode: 'wrong-wrong-wrong-0000' }, ip: '198.51.100.66' });
@@ -298,9 +181,8 @@ test('an attacker cannot lock a victim out by hammering their name', async () =>
 });
 
 test('a successful sign-in clears the failure counter', async () => {
-  const r = await call('POST', '/api/signup', { body: { displayName: 'Fumble' }, ip: '10.8.8.8' });
-  const code = r.body.recoveryCode;
   const ip = '10.8.8.8';
+  const { code } = await account('Fumble', { ip });
   for (let i = 0; i < 8; i += 1) {
     await call('POST', '/api/login', { body: { displayName: 'Fumble', recoveryCode: 'no' }, ip });
   }

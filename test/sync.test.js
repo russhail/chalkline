@@ -340,3 +340,42 @@ test('the board query returns only the columns the board needs', async () => {
     assert.ok(!(unused in row), `${unused} is not used by the board and should not be selected`);
   }
 });
+
+test('a game already finished the first time we see it still settles and rates', async () => {
+  // A cold database, or a game that both started and ended between two syncs.
+  // The insert path used to return before the settlement check, so these went
+  // in unsettled and unrated: the model never learned from the result and the
+  // game never appeared on the results page.
+  const store = createStore({ backend: 'sqlite' });
+  await store.migrate();
+  const teams = [
+    { id: 1, name: 'Alpha', abbreviation: 'A', division: 'Open', country: 'IRL', seed: 1 },
+    { id: 2, name: 'Beta', abbreviation: 'B', division: 'Open', country: 'GBR', seed: 2 },
+  ];
+  const game = {
+    id: 900, homeTeamId: 1, awayTeamId: 2, homeLabel: null, awayLabel: null,
+    division: 'Open', poolName: 'Pool A', poolId: 1,
+    startsAt: '2026-08-15T10:00:00Z', status: 'final', ongoing: false,
+    homeScore: 15, awayScore: 9, valid: true,
+  };
+  await sync(store, {
+    force: true, now: Date.parse('2026-08-16T18:00:00Z'),
+    fetcher: async () => ({
+      heartbeat: { cacheVersion: 'v1' }, teams,
+      fieldSizes: { Open: 40 }, games: [game],
+    }),
+  });
+
+  const [g] = await store.query('SELECT settled, rated, home_score FROM games WHERE id = 900');
+  assert.ok(g.settled, 'the game settles on the very first sync that sees it');
+  assert.ok(g.rated, 'and the ratings learn from it');
+  assert.equal(Number(g.home_score), 15);
+
+  // Both clubs have now played one game, which is what makes them rankable.
+  const rows = await store.query('SELECT id, played, rating FROM teams ORDER BY id');
+  assert.equal(Number(rows[0].played), 1);
+  assert.equal(Number(rows[1].played), 1);
+  assert.ok(Number(rows[0].rating) > Number(rows[1].rating),
+    'winning by six moves the winner above the loser');
+  store.close();
+});

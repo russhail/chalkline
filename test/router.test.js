@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { createStore } from '../lib/store.js';
 import { handle, parseCookies, COOKIE } from '../lib/router.js';
 import { sync } from '../lib/sync.js';
+import * as auth from '../lib/auth.js';
+import { placeBet } from '../lib/betting.js';
 
 const NOW = Date.parse('2026-08-16T10:00:00Z');
 let store;
@@ -39,44 +41,20 @@ beforeEach(async () => {
   });
 });
 
-async function signUp(name = 'Russ', email) {
-  const res = await call('POST', '/api/signup', { body: { displayName: name, email } });
-  return { res, cookie: cookieFrom(res), code: res.body.recoveryCode };
+// There is no signup endpoint any more, so accounts are made straight through
+// lib/auth.js. Everything behind a session still has to be exercised, and the
+// honest way to reach that state now is the way the site itself would: create
+// the row, then sign in through the route that still exists.
+async function account(displayName = 'Russ', email) {
+  const made = await auth.createUser(store, { displayName, email, now: NOW });
+  assert.ok(made.ok, `fixture account "${displayName}": ${made.errors?.join(' ')}`);
+  const res = await call('POST', '/api/login',
+    { body: { displayName, recoveryCode: made.recoveryCode } });
+  return { res, userId: made.userId, code: made.recoveryCode, cookie: cookieFrom(res) };
 }
 
-test('signup needs only a name, and returns a recovery code once', async () => {
-  const { res, cookie } = await signUp();
-  assert.equal(res.status, 200);
-  assert.equal(res.body.user.displayName, 'Russ');
-  assert.equal(res.body.user.bankroll, 10000);
-  assert.match(res.body.recoveryCode, /^[a-z]+-[a-z]+-[a-z]+$/);
-  assert.ok(cookie, 'should sign you straight in');
-});
-
-test('no email address is stored unless one is offered', async () => {
-  await signUp();
-  const [u] = await store.query('SELECT email FROM users WHERE display_name = $1', ['Russ']);
-  assert.equal(u.email, null);
-  const me = await call('GET', '/api/me', { cookie: (await signUp('Sam')).cookie });
-  assert.equal(me.body.user.hasRecoveryEmail, false);
-});
-
-test('the same name cannot be taken twice, case-insensitively', async () => {
-  await signUp('Russ');
-  const clash = await call('POST', '/api/signup', { body: { displayName: 'RUSS' } });
-  assert.equal(clash.status, 400);
-  assert.match(clash.body.error, /taken/);
-});
-
-test('names that are too short or full of junk are refused', async () => {
-  for (const displayName of ['R', '', 'x'.repeat(25), 'drop<table>']) {
-    const res = await call('POST', '/api/signup', { body: { displayName } });
-    assert.equal(res.status, 400, `"${displayName}" should be refused`);
-  }
-});
-
 test('signing in takes the name and code, and tolerates retyping', async () => {
-  const { code } = await signUp();
+  const { code } = await account();
   await call('POST', '/api/logout');
   for (const variant of [code, code.toUpperCase(), code.replace(/-/g, ' '), code.replace(/-/g, '')]) {
     const res = await call('POST', '/api/login', { body: { displayName: 'russ', recoveryCode: variant } });
@@ -85,7 +63,7 @@ test('signing in takes the name and code, and tolerates retyping', async () => {
 });
 
 test('a wrong code is refused', async () => {
-  await signUp();
+  await account();
   const res = await call('POST', '/api/login',
     { body: { displayName: 'Russ', recoveryCode: 'huck-huck-huck' } });
   assert.equal(res.status, 401);
@@ -93,19 +71,27 @@ test('a wrong code is refused', async () => {
 });
 
 test('the recovery code is never stored in a readable form', async () => {
-  const { code } = await signUp();
+  const { code, cookie } = await account();
   const [u] = await store.query('SELECT recovery_hash FROM users WHERE display_name = $1', ['Russ']);
   assert.ok(!u.recovery_hash.includes(code), 'the plain code must not be in the database');
   assert.match(u.recovery_hash, /^scrypt\$/);
+
+  // Rotation is the only route that still issues a code, so it has to store it
+  // the same way — a second issuing path is exactly where a plaintext write
+  // would go unnoticed.
+  const rotated = await call('POST', '/api/regenerate-code', { cookie });
+  const [after] = await store.query('SELECT recovery_hash FROM users WHERE display_name = $1', ['Russ']);
+  assert.ok(!after.recovery_hash.includes(rotated.body.recoveryCode));
+  assert.match(after.recovery_hash, /^scrypt\$/);
 });
 
-test('an optional email can be given at signup and attached later', async () => {
-  const withEmail = await signUp('Nell', 'nell@example.com');
-  assert.equal(withEmail.res.status, 200);
+test('an account can carry a recovery address, and one can be attached later', async () => {
+  const withEmail = await account('Nell', 'nell@example.com');
   const me = await call('GET', '/api/me', { cookie: withEmail.cookie });
   assert.equal(me.body.user.hasRecoveryEmail, true);
 
-  const { cookie } = await signUp('Sam');
+  const { cookie } = await account('Sam');
+  assert.equal((await call('GET', '/api/me', { cookie })).body.user.hasRecoveryEmail, false);
   const set = await call('POST', '/api/email', { body: { email: 'sam@example.com' }, cookie });
   assert.equal(set.status, 200);
   const after = await call('GET', '/api/me', { cookie });
@@ -113,26 +99,30 @@ test('an optional email can be given at signup and attached later', async () => 
 });
 
 test('one email cannot cover two accounts', async () => {
-  await signUp('Nell', 'nell@example.com');
-  const clash = await call('POST', '/api/signup',
-    { body: { displayName: 'Other', email: 'NELL@example.com' } });
+  await account('Nell', 'nell@example.com');
+  const { cookie } = await account('Other');
+  const clash = await call('POST', '/api/email',
+    { body: { email: 'NELL@example.com' }, cookie });
   assert.equal(clash.status, 400);
   assert.match(clash.body.error, /already attached/);
 });
 
-test('a malformed optional email is refused rather than silently dropped', async () => {
-  const res = await call('POST', '/api/signup', { body: { displayName: 'Bob', email: 'nope' } });
+test('a malformed email is refused rather than silently dropped', async () => {
+  const { cookie } = await account();
+  const res = await call('POST', '/api/email', { body: { email: 'nope' }, cookie });
   assert.equal(res.status, 400);
+  const [u] = await store.query('SELECT email FROM users WHERE display_name = $1', ['Russ']);
+  assert.equal(u.email, null, 'a refused address must not be half-stored');
 });
 
 test('recovery is unavailable, and says so, when no mail provider is set up', async () => {
-  await signUp('Nell', 'nell@example.com');
+  await account('Nell', 'nell@example.com');
   const res = await call('POST', '/api/recover', { body: { email: 'nell@example.com' } });
   assert.equal(res.status, 503);
 });
 
 test('a failed send never invalidates the working code', async () => {
-  const { code } = await signUp('Nell', 'nell@example.com');
+  const { code } = await account('Nell', 'nell@example.com');
   process.env.RESEND_API_KEY = 'test-key-that-will-fail';
   const original = globalThis.fetch;
   globalThis.fetch = async () => ({ ok: false, status: 500, text: async () => 'nope' });
@@ -153,32 +143,18 @@ test('the board prices every open game', async () => {
   assert.equal(res.body.games.length, 1);
   const g = res.body.games[0];
   assert.equal(g.home.name, 'Colony');
-  assert.ok(g.home.odds < g.away.odds, 'top seed should be favourite');
-  const implied = 1 / g.home.odds + 1 / g.away.odds;
-  assert.ok(implied > 1.02 && implied < 1.12, `board prices carry the margin (${implied})`);
-});
-
-test('betting requires an account', async () => {
-  const res = await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 100 } });
-  assert.equal(res.status, 401);
-});
-
-test('a signed-in punter can place a bet and it shows in their slips', async () => {
-  const { cookie } = await signUp();
-  const bet = await call('POST', '/api/bet',
-    { body: { gameId: 1, side: 'home', stake: 2500 }, cookie });
-  assert.equal(bet.status, 200);
-  assert.equal(bet.body.bet.stake, 2500);
-  assert.equal(bet.body.bet.bankroll, 7500);
-
-  const mine = await call('GET', '/api/mybets', { cookie });
-  assert.equal(mine.body.bets.length, 1);
-  assert.equal(mine.body.bets[0].home_name, 'Colony');
+  assert.ok(g.home.prob > g.away.prob, 'top seed should be favourite');
+  // The published number is the model's own probability, not a market price:
+  // nothing can be staked any more, so no money bends it and the two sides sum
+  // to exactly one with no margin taken out in between.
+  assert.equal(Math.round((g.home.prob + g.away.prob) * 1e6) / 1e6, 1);
+  assert.ok(!('odds' in g.home) && !('odds' in g.away), 'a stats board quotes no prices');
+  assert.ok(!('staked' in g) && !('spreads' in g));
 });
 
 test('bets are hidden until the game locks, then revealed', async () => {
-  const { cookie } = await signUp();
-  await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 500 }, cookie });
+  const { userId } = await account();
+  await placeBet(store, { userId, gameId: 1, side: 'home', stake: 500, clock: () => NOW });
 
   const before = await call('GET', '/api/game/1');
   assert.equal(before.body.revealed, false);
@@ -190,18 +166,8 @@ test('bets are hidden until the game locks, then revealed', async () => {
   assert.equal(after.body.bets[0].display_name, 'Russ');
 });
 
-test('betting after kickoff is refused', async () => {
-  const { cookie } = await signUp();
-  const res = await call('POST', '/api/bet', {
-    body: { gameId: 1, side: 'home', stake: 100 }, cookie,
-    now: Date.parse('2026-08-16T14:00:00Z'),
-  });
-  assert.equal(res.status, 400);
-  assert.match(res.body.error, /closed/);
-});
-
 test('admin endpoints are closed to ordinary punters', async () => {
-  const { cookie } = await signUp();
+  const { cookie } = await account();
   for (const [method, path, body] of [
     ['POST', '/api/admin/settle', { gameId: 1, homeScore: 15, awayScore: 9 }],
     ['POST', '/api/admin/void', { gameId: 1 }],
@@ -213,9 +179,10 @@ test('admin endpoints are closed to ordinary punters', async () => {
 });
 
 test('an admin can settle a game and it pays out', async () => {
-  const { cookie } = await signUp();
-  const punter = await signUp('Sam', 'sam@test.com');
-  await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 1000 }, cookie: punter.cookie });
+  const { cookie } = await account();
+  const punter = await account('Sam', 'sam@test.com');
+  const bet = await placeBet(store,
+    { userId: punter.userId, gameId: 1, side: 'home', stake: 1000, clock: () => NOW });
   await store.query('UPDATE users SET is_admin = TRUE WHERE display_name = $1', ['Russ']);
 
   const res = await call('POST', '/api/admin/settle',
@@ -223,15 +190,16 @@ test('an admin can settle a game and it pays out', async () => {
   assert.equal(res.status, 200);
   assert.equal(res.body.settledBets, 1);
 
-  const mine = await call('GET', '/api/mybets', { cookie: punter.cookie });
-  assert.equal(mine.body.bets[0].status, 'won');
-  assert.ok(mine.body.bets[0].payout > 1000);
+  const [row] = await store.query('SELECT status, payout FROM bets WHERE id = $1', [bet.betId]);
+  assert.equal(row.status, 'won');
+  assert.ok(row.payout > 1000);
 });
 
 test('an admin can void a game and everyone is refunded', async () => {
-  const { cookie } = await signUp();
-  const punter = await signUp('Sam', 'sam@test.com');
-  await call('POST', '/api/bet', { body: { gameId: 1, side: 'away', stake: 3000 }, cookie: punter.cookie });
+  const { cookie } = await account();
+  const punter = await account('Sam', 'sam@test.com');
+  await placeBet(store,
+    { userId: punter.userId, gameId: 1, side: 'away', stake: 3000, clock: () => NOW });
   await store.query('UPDATE users SET is_admin = TRUE WHERE display_name = $1', ['Russ']);
 
   const res = await call('POST', '/api/admin/void',
@@ -246,10 +214,11 @@ test('the sync endpoint refuses anonymous callers without the cron secret', asyn
   assert.equal(res.status, 401);
 });
 
-test('leaderboard and health respond without auth', async () => {
-  const lb = await call('GET', '/api/leaderboard');
-  assert.equal(lb.status, 200);
-  assert.ok(Array.isArray(lb.body.bankroll));
+test('every read endpoint the site is built on answers without a session', async () => {
+  for (const path of ['/api/games', '/api/results', '/api/rankings', '/api/health']) {
+    const res = await call('GET', path);
+    assert.equal(res.status, 200, `${path} must answer a visitor with no account`);
+  }
   const health = await call('GET', '/api/health');
   assert.equal(health.body.games, 1);
 });
@@ -259,8 +228,30 @@ test('unknown endpoints 404 rather than crashing', async () => {
   assert.equal(res.status, 404);
 });
 
+// The accounts, the sessions and the betting engine all survived the move to a
+// stats site; only the four routes below were taken out. Nothing else proves
+// they are gone, and re-exporting any one of them would quietly put play money
+// back on a site that no longer claims to have any. A signed-in caller is used
+// deliberately: 404 rather than 401 is the difference between "removed" and
+// "merely guarded".
+test('the four betting endpoints are gone, not merely closed', async () => {
+  const { cookie } = await account();
+  for (const [method, path, body] of [
+    ['POST', '/api/bet', { gameId: 1, side: 'home', stake: 100 }],
+    ['GET', '/api/mybets', undefined],
+    ['GET', '/api/leaderboard', undefined],
+    ['POST', '/api/signup', { displayName: 'Newcomer' }],
+  ]) {
+    const res = await call(method, path, { body, cookie });
+    assert.equal(res.status, 404, `${method} ${path} must not be an endpoint`);
+    assert.match(res.body.error, /No such endpoint/);
+  }
+  const [{ n }] = await store.query('SELECT COUNT(*) AS n FROM bets');
+  assert.equal(Number(n), 0, 'and nothing may be written on the way to the 404');
+});
+
 test('logout clears the session', async () => {
-  const { cookie } = await signUp();
+  const { cookie } = await account();
   await call('POST', '/api/logout', { cookie });
   const me = await call('GET', '/api/me', { cookie });
   assert.equal(me.body.user, null);
@@ -343,8 +334,8 @@ test('tick is open without auth but reports honestly', async () => {
 // --- the email must never leave the server ---------------------------------
 
 test('no public endpoint exposes an email address', async () => {
-  const { cookie } = await signUp('Russ', 'secret-address@example.com');
-  await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 1000 }, cookie });
+  const { cookie, userId } = await account('Russ', 'secret-address@example.com');
+  await placeBet(store, { userId, gameId: 1, side: 'home', stake: 1000, clock: () => NOW });
   await store.query('UPDATE users SET is_admin = TRUE WHERE display_name = $1', ['Russ']);
   await call('POST', '/api/admin/settle',
     { body: { gameId: 1, homeScore: 15, awayScore: 9 }, cookie });
@@ -352,10 +343,10 @@ test('no public endpoint exposes an email address', async () => {
   const endpoints = [
     ['GET', '/api/games', undefined],
     ['GET', '/api/game/1', undefined],
-    ['GET', '/api/leaderboard', undefined],
+    ['GET', '/api/rankings', undefined],
+    ['GET', '/api/search?q=colony', undefined],
     ['GET', '/api/health', undefined],
     ['GET', '/api/me', cookie],
-    ['GET', '/api/mybets', cookie],
     ['GET', '/api/admin/games', cookie],
     ['GET', '/api/tick', cookie],
   ];
@@ -370,8 +361,8 @@ test('no public endpoint exposes an email address', async () => {
 });
 
 test('the revealed bet feed shows names only, never contact details', async () => {
-  const { cookie } = await signUp('Russ', 'russ@example.com');
-  await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 500 }, cookie });
+  const { userId } = await account('Russ', 'russ@example.com');
+  await placeBet(store, { userId, gameId: 1, side: 'home', stake: 500, clock: () => NOW });
   const res = await call('GET', '/api/game/1', { now: Date.parse('2026-08-16T15:00:00Z') });
   assert.equal(res.body.revealed, true);
   assert.deepEqual(Object.keys(res.body.bets[0]).sort(),
@@ -379,8 +370,8 @@ test('the revealed bet feed shows names only, never contact details', async () =
 });
 
 test('the recovery hash never leaves the server either', async () => {
-  const { cookie } = await signUp();
-  for (const path of ['/api/me', '/api/mybets', '/api/leaderboard']) {
+  const { cookie } = await account();
+  for (const path of ['/api/me', '/api/game/1', '/api/rankings']) {
     const res = await call('GET', path, { cookie });
     const body = JSON.stringify(res.body);
     assert.ok(!body.includes('scrypt'), `${path} leaked a password hash`);
@@ -389,7 +380,7 @@ test('the recovery hash never leaves the server either', async () => {
 });
 
 test('a signed-in player can rotate their code, and the old one dies', async () => {
-  const { cookie, code } = await signUp();
+  const { cookie, code } = await account();
   const res = await call('POST', '/api/regenerate-code', { cookie });
   assert.equal(res.status, 200);
   const fresh = res.body.recoveryCode;
@@ -404,14 +395,14 @@ test('a signed-in player can rotate their code, and the old one dies', async () 
 });
 
 test('rotating a code keeps you signed in on the device you did it from', async () => {
-  const { cookie } = await signUp();
+  const { cookie } = await account();
   await call('POST', '/api/regenerate-code', { cookie });
   const me = await call('GET', '/api/me', { cookie });
   assert.equal(me.body.user.displayName, 'Russ');
 });
 
 test('you cannot rotate someone else’s code', async () => {
-  await signUp();
+  await account();
   const res = await call('POST', '/api/regenerate-code');
   assert.equal(res.status, 401);
 });
@@ -476,7 +467,7 @@ test('every admin route rejects an anonymous caller', async () => {
 });
 
 test('every admin route rejects an ordinary signed-in player', async () => {
-  const { cookie } = await signUp('Nosy', undefined);
+  const { cookie } = await account('Nosy');
   for (const [method, path, body] of ADMIN_ROUTES) {
     const res = await call(method, path, { body, cookie });
     assert.equal(res.status, 403, `${path} must not answer a non-admin`);
@@ -485,9 +476,10 @@ test('every admin route rejects an ordinary signed-in player', async () => {
 });
 
 test('a non-admin cannot settle a game by calling the API directly', async () => {
-  const punter = await signUp('Punter');
-  await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 1000 }, cookie: punter.cookie });
-  const attacker = await signUp('Attacker');
+  const punter = await account('Punter');
+  await placeBet(store,
+    { userId: punter.userId, gameId: 1, side: 'home', stake: 1000, clock: () => NOW });
+  const attacker = await account('Attacker');
   const res = await call('POST', '/api/admin/settle',
     { body: { gameId: 1, homeScore: 0, awayScore: 15 }, cookie: attacker.cookie });
   assert.equal(res.status, 403);
@@ -498,37 +490,29 @@ test('a non-admin cannot settle a game by calling the API directly', async () =>
 });
 
 test('nobody is an admin by default', async () => {
-  const { res } = await signUp();
+  const { res } = await account();
   assert.equal(res.body.user.isAdmin, false);
 });
 
 test('another player cannot see whether you are an admin', async () => {
-  const { cookie } = await signUp('Boss');
+  const { userId } = await account('Boss');
   await store.query('UPDATE users SET is_admin = TRUE WHERE display_name = $1', ['Boss']);
-  await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 100 }, cookie });
+  await placeBet(store, { userId, gameId: 1, side: 'home', stake: 100, clock: () => NOW });
 
-  const lb = await call('GET', '/api/leaderboard');
-  assert.ok(!JSON.stringify(lb.body).includes('is_admin'), 'the leaderboard must not expose the flag');
   const feed = await call('GET', '/api/game/1', { now: Date.parse('2026-08-16T15:00:00Z') });
+  assert.equal(feed.body.bets.length, 1, 'the feed has to be showing something to be a leak');
   assert.ok(!JSON.stringify(feed.body).includes('is_admin'));
 });
 
-test('finished games leave the board and live only in your bet history', async () => {
-  const { cookie } = await signUp();
-  await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 500 }, cookie });
-
+test('a game that has kicked off leaves the board rather than lingering on it', async () => {
   const after = await call('GET', '/api/games', { now: Date.parse('2026-08-16T15:00:00Z') });
-  assert.equal(after.body.games.length, 0, 'a started game is not bettable');
-  assert.ok(!('recent' in after.body), 'and does not clutter the board');
-
-  const mine = await call('GET', '/api/mybets', { cookie });
-  assert.equal(mine.body.bets.length, 1, 'it is still in your history because you backed it');
-  assert.equal(mine.body.bets[0].home_name, 'Colony');
+  assert.equal(after.body.games.length, 0, 'the board is what is still to come');
+  assert.ok(!('recent' in after.body), 'and does not clutter itself with what is not');
 });
 
 test('a started game exposes who backed what; an upcoming one does not', async () => {
-  const { cookie } = await signUp();
-  await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 500 }, cookie });
+  const { userId } = await account();
+  await placeBet(store, { userId, gameId: 1, side: 'home', stake: 500, clock: () => NOW });
 
   const hidden = await call('GET', '/api/game/1');
   assert.equal(hidden.body.revealed, false);
@@ -543,8 +527,8 @@ test('a started game exposes who backed what; an upcoming one does not', async (
 // --- caching correctness ----------------------------------------------------
 
 test('personal responses are never cacheable', async () => {
-  const { cookie } = await signUp();
-  for (const path of ['/api/me', '/api/mybets', '/api/tick', '/api/health']) {
+  const { cookie } = await account();
+  for (const path of ['/api/me', '/api/game/1', '/api/tick', '/api/health']) {
     const res = await call('GET', path, { cookie });
     assert.match(res.headers['Cache-Control'], /no-store/,
       `${path} must not be storable — a shared cache would serve one player another's data`);
@@ -554,8 +538,8 @@ test('personal responses are never cacheable', async () => {
   assert.match(login.headers['Cache-Control'], /no-store/);
 });
 
-test('the board and leaderboard are shareable, and set no cookie', async () => {
-  for (const path of ['/api/games', '/api/leaderboard']) {
+test('the board, the results and the rankings are shareable, and set no cookie', async () => {
+  for (const path of ['/api/games', '/api/results', '/api/rankings']) {
     const res = await call('GET', path);
     assert.match(res.headers['Cache-Control'], /s-maxage/, `${path} should be shared-cacheable`);
     assert.ok(!res.headers['Set-Cookie'], 'a cacheable response must never carry a cookie');
@@ -563,15 +547,15 @@ test('the board and leaderboard are shareable, and set no cookie', async () => {
 });
 
 test('a signed-in board request still cannot leak a session into the cache', async () => {
-  const { cookie } = await signUp();
+  const { cookie } = await account();
   const res = await call('GET', '/api/games', { cookie });
   assert.ok(!res.headers['Set-Cookie']);
   assert.ok(!JSON.stringify(res.body).includes('Russ'), 'the board is identical for everyone');
 });
 
 test('an admin can export everything that cannot be rebuilt from the feed', async () => {
-  const { cookie } = await signUp();
-  await call('POST', '/api/bet', { body: { gameId: 1, side: 'home', stake: 250 }, cookie });
+  const { cookie, userId } = await account();
+  await placeBet(store, { userId, gameId: 1, side: 'home', stake: 250, clock: () => NOW });
   await store.query('UPDATE users SET is_admin = TRUE WHERE display_name = $1', ['Russ']);
 
   const res = await call('GET', '/api/admin/export', { cookie });
@@ -584,7 +568,7 @@ test('an admin can export everything that cannot be rebuilt from the feed', asyn
 });
 
 test('the export is admin-only', async () => {
-  const { cookie } = await signUp('Nosy');
+  const { cookie } = await account('Nosy');
   assert.equal((await call('GET', '/api/admin/export', { cookie })).status, 403);
   assert.equal((await call('GET', '/api/admin/export')).status, 401);
 });
@@ -606,12 +590,16 @@ test('search finds clubs by country and abbreviation too', async () => {
   assert.ok(byAbbr.body.teams.some((t) => t.name === 'Colony'));
 });
 
-test('search returns the fixtures you can bet on, priced', async () => {
+test('search returns a club’s upcoming fixtures, priced the same way the board prices them', async () => {
   const res = await call('GET', '/api/search?q=colony');
   assert.equal(res.body.games.length, 1);
   const g = res.body.games[0];
-  assert.ok(g.home.odds > 1 && g.away.odds > 1);
-  assert.ok(g.spreads.length === 3, 'spreads travel with a searched fixture');
+  assert.ok(g.home.prob > 0 && g.away.prob > 0);
+  assert.equal(Math.round((g.home.prob + g.away.prob) * 1e6) / 1e6, 1);
+  // Search and the board go through one pricing call, so a fixture cannot be
+  // quoted one way here and another way there.
+  const board = (await call('GET', '/api/games')).body.games[0];
+  assert.deepEqual(g.home, board.home);
 });
 
 test('search reaches games the board is too near-sighted to show', async () => {
@@ -647,21 +635,22 @@ test('search cannot be used to inject SQL', async () => {
 });
 
 test('search results are shared-cacheable and carry no session', async () => {
-  const { cookie } = await signUp();
+  const { cookie } = await account();
   const res = await call('GET', '/api/search?q=colony', { cookie });
   assert.match(res.headers['Cache-Control'], /s-maxage/);
   assert.ok(!res.headers['Set-Cookie']);
 });
 
 test('a recovery code is exactly three words and nothing else', async () => {
-  const seen = new Set();
-  for (let i = 0; i < 40; i += 1) {
-    const res = await call('POST', '/api/signup',
-      { body: { displayName: `Word${i}` }, ip: `10.42.0.${i}` });
-    const code = res.body.recoveryCode;
-    assert.match(code, /^[a-z]+-[a-z]+-[a-z]+$/, `got "${code}"`);
-    assert.equal(code.split('-').length, 3);
-    seen.add(code);
+  // Rotation is the only path that still issues codes, so it is the one that
+  // has to keep producing readable, unguessable ones.
+  const { cookie, code } = await account();
+  const seen = new Set([code]);
+  for (let i = 0; i < 39; i += 1) {
+    const fresh = (await call('POST', '/api/regenerate-code', { cookie })).body.recoveryCode;
+    assert.match(fresh, /^[a-z]+-[a-z]+-[a-z]+$/, `got "${fresh}"`);
+    assert.equal(fresh.split('-').length, 3);
+    seen.add(fresh);
   }
   assert.ok(seen.size > 35, `codes should not repeat: ${seen.size} distinct of 40`);
 });
@@ -686,7 +675,7 @@ test('search exposes what the model has learned about a club', async () => {
 
 test('a result raises the winner’s rating and the site can show it', async () => {
   const before = (await call('GET', '/api/search?q=aethers')).body.teams[0];
-  const { cookie } = await signUp();
+  const { cookie } = await account();
   await store.query('UPDATE users SET is_admin = TRUE WHERE display_name = $1', ['Russ']);
   await call('POST', '/api/admin/settle',
     { body: { gameId: 1, homeScore: 9, awayScore: 15 }, cookie });
@@ -698,7 +687,7 @@ test('a result raises the winner’s rating and the site can show it', async () 
 });
 
 test('a session expires even when its timestamp arrives in Postgres format', async () => {
-  const { cookie } = await signUp();
+  const { cookie } = await account();
   // Exactly what Postgres returns; Date.parse reads it as NaN.
   await store.query("UPDATE sessions SET created_at = '2026-01-01 10:00:00+00'");
   const stale = await call('GET', '/api/me', { now: Date.parse('2026-08-16T10:00:00Z') });
@@ -708,7 +697,7 @@ test('a session expires even when its timestamp arrives in Postgres format', asy
 });
 
 test('a fresh session is not expired by the same parsing', async () => {
-  const { cookie } = await signUp();
+  const { cookie } = await account();
   await store.query("UPDATE sessions SET created_at = '2026-08-16 09:00:00+00'");
   const me = await call('GET', '/api/me', { cookie, now: Date.parse('2026-08-16T10:00:00Z') });
   assert.equal(me.body.user.displayName, 'Russ');

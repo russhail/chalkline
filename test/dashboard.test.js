@@ -250,8 +250,14 @@ test('a game nobody bet on still reaches the dashboard', async () => {
       fieldSizes: { "Women's": 40 }, games: [unbet],
     }),
   });
-  const [before] = await store.query('SELECT settled FROM games WHERE id = 1279');
-  assert.ok(!before.settled, 'no bets, so never settled');
+  // This used to assert the game was NOT settled, which quietly encoded a bug:
+  // a game already final the first time it is seen skipped the settlement check
+  // on the insert path, so it stayed unrated and the model never learned from
+  // it. It settles now. What this test is actually about is unchanged — the
+  // ingest must not care whether anyone had money on the game.
+  const [{ n: betsOn } = {}] = await store.query(
+    'SELECT COUNT(*) AS n FROM bets WHERE game_id = 1279');
+  assert.equal(Number(betsOn), 0, 'nobody backed it');
 
   const res = await syncGameDetail(store, {
     fetcher: async () => ({ ...DETAIL, game_result: { ...DETAIL.game_result, game_id: 1279 } }),
