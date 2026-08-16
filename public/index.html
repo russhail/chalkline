@@ -140,6 +140,33 @@ main{max-width:900px;margin:0 auto;padding:14px 12px 120px}
 .rl-val{text-align:right;font-size:15px;font-weight:800;font-variant-numeric:tabular-nums;
   letter-spacing:-.01em;color:var(--muted)}
 .rl-val.up{color:var(--up)}
+.rl-name .who.tap{cursor:pointer;border-bottom:1px dotted var(--dim)}
+
+/* club profile */
+.pfhead{padding:2px 4px 12px}
+.pfhead .pfn{font-size:22px;font-weight:800;letter-spacing:-.01em}
+.pfhead .pfm{font-size:11.5px;color:var(--dim);margin-top:3px}
+.pfhead .pfs{font-size:12px;color:var(--muted);margin-top:8px;line-height:1.5}
+.pf{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);
+  overflow:hidden;margin-bottom:6px}
+.pf .pr{display:grid;grid-template-columns:minmax(0,1fr) 96px 62px;gap:10px;align-items:center;
+  padding:9px 12px;border-bottom:1px solid var(--line)}
+.pf .pr:last-child{border-bottom:none}
+.pf .pr.thin{opacity:.45}
+.pf .pl{font-size:12.5px;font-weight:650;min-width:0}
+.pf .pl b{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pf .pl u{display:block;text-decoration:none;font-size:10.5px;color:var(--dim);
+  font-weight:500;line-height:1.35;margin-top:1px}
+.dev{position:relative;display:block;height:8px;background:#1a212c;border-radius:99px}
+.dev i{position:absolute;top:0;bottom:0;border-radius:99px;background:#48566b}
+.dev i.good{background:var(--up)}
+.dev i.neutral{background:linear-gradient(90deg,#6b5ea8,#9b8ad6)}
+.dev s{position:absolute;top:-3px;width:2px;height:14px;background:var(--chalk);
+  opacity:.7;transform:translateX(-1px)}
+.pf .pv{text-align:right;font-size:14px;font-weight:800;font-variant-numeric:tabular-nums}
+.pf .pv.up{color:var(--up)}
+.pf .pv u{display:block;text-decoration:none;font-size:10px;color:var(--dim);font-weight:600}
+.lb .nm .arw{color:var(--dim);font-weight:500;padding:0 2px}
 
 /* ---- slip ---- */
 #slip{position:fixed;left:0;right:0;bottom:0;z-index:50;background:var(--surface);
@@ -243,6 +270,7 @@ const esc = s => String(s ?? '').replace(/[&<>"']/g, c =>
   ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 
 const S = { user: null, tab: 'board', sel: null, div: 'all',
+  teamId: null, relianceKey: 'total',
             lbTab: 'bankroll', open: new Set(), query: '', results: null,
             stats: null, statsDiv: null, statView: 'breaks', statDivision: '',
             days: [], day: null, gamesByDay: {}, openDays: new Set(),
@@ -289,8 +317,11 @@ function renderChrome() {
   tabs.push(['bets', 'My bets'], ['leaders', 'Leaderboard'], ['stats', 'Stats']);
   if (S.user?.isAdmin) tabs.push(['admin', 'Admin']);
   if (S.user) tabs.push(['account', 'Account'], ['out', 'Sign out']);
+  // A club profile is reached from the stats tab and belongs to it, so the
+  // nav keeps Stats lit rather than showing nothing selected.
+  const lit = S.tab === 'team' ? 'stats' : S.tab;
   $('#nav').innerHTML = tabs.map(([k, l]) =>
-    `<button class="${S.tab === k ? 'on' : ''}" onclick="go('${k}')">${l}</button>`).join('');
+    `<button class="${lit === k ? 'on' : ''}" onclick="go('${k}')">${l}</button>`).join('');
 }
 
 async function go(tab) {
@@ -686,32 +717,72 @@ const STAT_VIEWS = [
     fmt: (t) => (t.oSecsPerPoint === null ? '—' : `${t.oSecsPerPoint}s`),
     sub: (t) => `${clock(t.oTime)} total on offence, over ${t.oClockN} points` },
 
-  { key: 'dtime',   label: 'D point length',
-    note: 'How long a defensive point lasts. Read it with the break rate: short points and a high break rate is a defence forcing quick turnovers, while short points and a low break rate just means the other side is holding easily. Longest first — a defence that keeps the point alive is doing something.',
-    plain: true, min: 10, whole: (t) => t.dClockN,
-    value: (t) => (t.dSecsPerPoint === null ? -1 : t.dSecsPerPoint),
-    fmt: (t) => (t.dSecsPerPoint === null ? '—' : `${t.dSecsPerPoint}s`),
-    sub: (t) => `${clock(t.dTime)} total on defence, over ${t.dClockN} points` },
+  { key: 'breaktime', label: 'Time to break',
+    note: 'When this defence scores, how long the point took. Shorter is better: the turn came early and got converted. This used to be averaged together with the points they were held on, which made the number meaningless — those two halves want opposite things, so a ruthless defence and a leaky one could land on the same figure by opposite routes. Quickest first.',
+    plain: true, lowerIsBetter: true, min: 5, whole: (t) => t.breakClockN,
+    value: (t) => (t.secondsPerBreak === null ? Infinity : t.secondsPerBreak),
+    fmt: (t) => (t.secondsPerBreak === null ? '—' : `${t.secondsPerBreak}s`),
+    sub: (t) => (t.breakClockN
+      ? `${clock(t.breakTime)} across ${t.breakClockN} break${t.breakClockN === 1 ? '' : 's'}`
+      : 'no breaks yet') },
+
+  { key: 'heldtime', label: 'Time to be held',
+    note: 'When this defence is beaten, how long they made it take. Longer is better here — the same side that wants a quick break wants a slow concession, because a defence giving up a point in forty seconds is being walked through. Read it against Time to break: a club good at both ends of that pair is genuinely hard to play. Longest first.',
+    plain: true, min: 5, whole: (t) => t.concededClockN,
+    value: (t) => (t.secondsPerConcededHold === null ? -1 : t.secondsPerConcededHold),
+    fmt: (t) => (t.secondsPerConcededHold === null ? '—' : `${t.secondsPerConcededHold}s`),
+    sub: (t) => (t.concededClockN
+      ? `${clock(t.concededTime)} across ${t.concededClockN} conceded`
+      : 'never conceded on defence') },
 
   { key: 'spread',  label: 'Star reliance',
-    note: 'How much of a club\'s scoring comes from three people. The rail is every goal and assist the club has produced and the lit part is their top three\'s share, so a long rail mostly dark is a squad scoring from everywhere. Neither end is better — a high number is a side with a weapon, and also a side that a single shutdown defender or one injury can flatten. Most concentrated first.',
-    part: (t) => t.topThree, whole: (t) => t.contributions, rate: (t) => t.concentration, min: 12,
+    keys: [['goals', 'Goals'], ['assists', 'Assists'], ['total', 'Both']],
+    note: 'How much of a club\'s output comes from three people. The rail is everything the club has produced and the lit part is their top three\'s share, so a long rail mostly dark is a squad contributing from everywhere. Neither end is better — a high number is a side with a weapon, and also a side that one shutdown defender or one injury can flatten. Split by goals and assists because they are different fragilities: a side whose assists pile up on one handler loses its engine when that player is marked, while a side whose goals pile up on one cutter still has an engine and nowhere to put the disc. Most concentrated first.',
+    part: (t) => rel(t).part, whole: (t) => rel(t).whole, rate: (t) => rel(t).rate, min: 12,
     neutral: true,
-    fmt: (t) => (t.concentration === null ? '—' : pctText(t.concentration)),
-    sub: (t) => (t.topThreeNames && t.topThreeNames.length
-      ? `${t.topThreeNames.map((p) => `${p.name} ${p.total}`).join(', ')} · ${t.contributors} have scored`
-      : `${t.contributors} have scored`) },
+    fmt: (t) => (rel(t).rate === null ? '—' : pctText(rel(t).rate)),
+    sub: (t) => relianceSub(t) },
 
   { key: 'timeouts', label: 'After a timeout',
-    note: 'Whether calling a timeout actually wins you the next point. Taking them is not the story — every side takes them, and a club that calls four is not doing better or worse than one that calls two. The rail is the points that followed a timeout and the lit part is the ones they went on to score. Small samples are visibly small: a short rail is a couple of timeouts and no more.',
+    note: 'Whether calling a timeout actually wins you the next point. Taking them is not the story — every side takes them, and a club that calls four is not doing better or worse than one that calls two. The rail is the points that followed a timeout and the lit part is the ones they went on to score. The line underneath splits those wins into breaks and holds, which are not the same achievement: winning the next point on defence takes the disc off someone, winning it on offence keeps the disc you already had. Small samples are visibly small: a short rail is a couple of timeouts and no more.',
     part: (t) => t.timeoutsConverted, whole: (t) => t.timeouts, rate: (t) => t.timeoutConversion, min: 5,
     fmt: (t) => (t.timeouts ? pctText(t.timeoutConversion) : '—'),
-    sub: (t) => (t.timeouts
-      ? `scored ${t.timeoutsConverted} of the ${t.timeouts} points that followed`
-      : 'no timeouts called') },
+    sub: (t) => {
+      if (!t.timeouts) return 'no timeouts called';
+      const split = (t.timeoutsBreak || t.timeoutsHold)
+        ? ` · ${t.timeoutsBreak} break${t.timeoutsBreak === 1 ? '' : 's'}, ${t.timeoutsHold} hold${t.timeoutsHold === 1 ? '' : 's'}`
+        : '';
+      return `scored ${t.timeoutsConverted} of the ${t.timeouts} that followed${split}`;
+    } },
 ];
 
 const pctText = (v) => (v === null || v === undefined ? '—' : `${v}%`);
+
+// Which slice of star reliance is on screen. The payload carries all three so
+// switching between them costs no request.
+const EMPTY_REL = { rate: null, part: 0, whole: 0, contributors: 0, names: [] };
+const relKey = () => S.relianceKey || 'total';
+const rel = (t) => (t.reliance && t.reliance[relKey()]) || EMPTY_REL;
+const RELIANCE_VERB = {
+  goals: 'have scored', assists: 'have assisted', total: 'have a goal or an assist',
+};
+
+// "Groom 12, Rippe 9, Lien 8 · 20 others have scored".
+//
+// The count is the TAIL, not the total. It used to read "23 have scored" next
+// to three named players, which invited exactly the wrong subtraction — the
+// interesting figure is how many people are not in the top three.
+function relianceSub(t) {
+  const r = rel(t);
+  const verb = RELIANCE_VERB[relKey()];
+  const unit = relKey() === 'assists' ? 'A' : relKey() === 'goals' ? 'G' : '';
+  const others = Math.max(0, r.contributors - r.names.length);
+  const tail = others === 0
+    ? `nobody else ${verb === 'have scored' ? 'has scored' : verb === 'have assisted' ? 'has assisted' : 'has contributed'}`
+    : `${others} other${others === 1 ? '' : 's'} ${verb}`;
+  if (!r.names.length) return `${r.contributors} ${verb}`;
+  return `${r.names.map((x) => `${x.name} ${x.n}${unit}`).join(', ')} · ${tail}`;
+}
 function clock(seconds) {
   const s = Math.max(0, Math.round(seconds || 0));
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60);
@@ -741,6 +812,13 @@ async function renderStats() {
     `<button class="${v.key === view.key ? 'on' : ''}"
        onclick="S.statView='${v.key}';render()">${v.label}</button>`).join('')}</div>`;
 
+  // Only the views that split three ways get a second row of buttons.
+  const keyBar = view.keys
+    ? `<div class="stat-tabs">${view.keys.map(([k, l]) =>
+        `<button class="${relKey() === k ? 'on' : ''}"
+           onclick="S.relianceKey='${k}';render()">${l}</button>`).join('')}</div>`
+    : '';
+
   const c = d.coverage;
   const dropped = Math.max(0, c.points - c.anchoredPoints);
   const cov = `<div class="cov">
@@ -766,9 +844,10 @@ async function renderStats() {
        ${esc(view.label.toLowerCase() === 'breaks' ? 'defensive points' : 'of them')} — so lengths
        compare down a block, never across two.</div>`;
 
-  return divBar + viewBar + cov + body +
+  return divBar + viewBar + keyBar + cov + body +
     `<div class="mnote">${esc(view.note)}</div>` + scaleNote +
-    playerBlock(d.players, S.statDivision);
+    playerBlock(d.players, S.statDivision) +
+    comboBlock(d.combos, S.statDivision);
 }
 
 // Sorting. Clubs with barely any data sink rather than topping the table on a
@@ -826,7 +905,8 @@ function statTable(rows, view, division, totalInDivision) {
     return `<div class="rl ${enough(view, t) ? '' : 'thin'}">
       <span class="rl-rk">${i + 1}</span>
       <span class="rl-main">
-        <span class="rl-name"><span class="who">${esc(t.name)}</span>
+        <span class="rl-name"><span class="who tap"
+          onclick="openTeam(${t.teamId})">${esc(t.name)}</span>
           <span class="ctry">${esc(t.country || '')}</span></span>
         ${view.plain ? '' : `<span class="rl-rail">
           <i class="rl-w" style="width:${(whole / maxWhole) * 100}%"></i>
@@ -853,6 +933,127 @@ function playerBlock(p, division) {
   return list('Most goals', p.goals, 'goals', 'G') +
          list('Most assists', p.assists, 'assists', 'A') +
          list('Goals + assists', p.combined, 'total', 'G+A');
+}
+
+// Who actually throws to whom. Both ends of every goal are in the feed, so
+// these pairs have always been there — they only become visible once a whole
+// tournament is pooled, which is why they aren't published anywhere.
+function comboBlock(combos, division, title) {
+  if (!combos || !combos.length) return '';
+  const scope = title ? '' : (division ? ` · ${division}` : ' · all divisions');
+  return `<div class="day">${esc(title || 'Best connections')}${scope}</div>
+    <div class="lb">${combos.slice(0, 10).map((c, i) => `<div class="r">
+      <span class="rk">${i + 1}</span>
+      <span class="nm">${esc(c.assistName || 'Unknown')}<span class="arw"> → </span>${
+        esc(c.scorerName || 'Unknown')}
+        <div class="sub">${esc(c.team || '')}</div></span>
+      <span class="v">${c.goals}<span style="font-size:10px;color:var(--dim)"> G</span></span>
+    </div>`).join('')}</div>` +
+    (title ? '' : `<div class="mnote">Pairs who have connected for at least two goals, thrower
+      first. A partnership is not a fact about any single game, so this is the one number here
+      that could not exist before the tournament was pooled.</div>`);
+}
+
+// --- club profile ------------------------------------------------------------
+//
+// Deliberately not another leaderboard. A ranked table shows one stat across
+// many clubs; this shows many stats for one club, which is a different question
+// and the one you actually ask when a name catches your eye.
+//
+// Every row is drawn against its division instead of in the abstract: the chalk
+// tick is the division median and the bar runs from there to where this club
+// sits. The eye reads the gap rather than the level, so you don't need to
+// already know what a good hold rate looks like in the Women's division to see
+// that a side is well past it. Divisions are benchmarked separately because
+// they never play each other.
+const fmtStat = (v, unit) => (v === null || v === undefined ? '—' : `${v}${unit}`);
+const ordinal = (v) => {
+  const s = ['th', 'st', 'nd', 'rd'], m = v % 100;
+  return v + (s[(m - 20) % 10] || s[m] || s[0]);
+};
+// Neutral stats have no good end, so they are never coloured as if they did.
+const betterThanMedian = (c) => !c.thin && !c.neutral && c.median !== null
+  && (c.lowerIsBetter ? c.value < c.median : c.value > c.median);
+
+function devBar(c) {
+  if (c.thin || c.value === null || c.median === null) return '<span class="dev"></span>';
+  // Scale to the division's own p10-p90, widened if this club sits outside it.
+  const lo = Math.min(c.p10 ?? c.value, c.value, c.median);
+  const hi = Math.max(c.p90 ?? c.value, c.value, c.median);
+  const span = hi - lo;
+  const at = (x) => (span > 0 ? ((x - lo) / span) * 100 : 50);
+  const pos = at(c.value), med = at(c.median);
+  const left = Math.min(pos, med);
+  const width = Math.min(Math.max(Math.abs(pos - med), 2), 100 - left);
+  const cls = c.neutral ? 'neutral' : (betterThanMedian(c) ? 'good' : '');
+  return `<span class="dev"><i class="${cls}" style="left:${left}%;width:${width}%"></i>` +
+         `<s style="left:${med}%"></s></span>`;
+}
+
+function squadBlock(squad) {
+  if (!squad || !squad.length) return '';
+  return `<div class="day">Squad · goals and assists</div>
+    <div class="lb">${squad.slice(0, 12).map((x, i) => `<div class="r">
+      <span class="rk">${i + 1}</span>
+      <span class="nm">${esc(x.name || 'Unknown')}
+        <div class="sub">${x.goals}G · ${x.assists}A</div></span>
+      <span class="v">${x.total}<span style="font-size:10px;color:var(--dim)"> G+A</span></span>
+    </div>`).join('')}</div>`;
+}
+
+function openTeam(id) {
+  if (!id) return;
+  closeSlip();
+  S.teamId = id; S.tab = 'team'; renderChrome(); render();
+}
+
+async function renderTeam() {
+  const p = await api('/team?id=' + encodeURIComponent(S.teamId));
+  const t = p.team, st = p.stats;
+
+  const back = `<button class="dayhead" onclick="go('stats')">
+      <span class="dh-c">‹</span><span class="dh-l">All clubs</span></button>`;
+
+  const head = `<div class="pfhead">
+    <div class="pfn">${esc(t.name)}</div>
+    <div class="pfm">${[t.country, t.division, t.seed ? `seed ${t.seed}` : null]
+      .filter(Boolean).map(esc).join(' · ')}</div>${st ? `
+    <div class="pfs">${st.holds + st.breaks} points scored of ${st.pointsPlayed} played, across
+      ${st.games} game${st.games === 1 ? '' : 's'}.${st.gamesUntraced
+        ? ` ${st.gamesUntraced} of them ${st.gamesUntraced === 1 ? 'is' : 'are'} missing the
+            opening offence, which costs a point or two off the breaks and holds below —
+            the rest of ${st.gamesUntraced === 1 ? 'that game' : 'those games'} counts normally.`
+        : ''}
+    </div>` : ''}
+  </div>`;
+
+  // A club with no traceable points is a different thing from a club with none
+  // of its stats above the gate, and the page should not conflate them.
+  if (!st) {
+    return back + head + `<div class="empty">Nothing traceable for this club yet.<br>
+      <span style="font-size:12px">Point-by-point data arrives a few minutes after
+      each game finishes.</span></div>`;
+  }
+
+  const rows = p.context.map((c) => `<div class="pr ${c.thin ? 'thin' : ''}">
+    <span class="pl"><b>${esc(c.label)}</b><u>${
+      c.thin ? 'not enough of it yet'
+        : c.median === null ? 'no division benchmark'
+        : `division median ${fmtStat(c.median, c.unit)}${
+            c.rank ? ` · ${ordinal(c.rank)} of ${c.of}` : ''}`}</u></span>
+    ${devBar(c)}
+    <span class="pv ${betterThanMedian(c) ? 'up' : ''}">${
+      c.thin ? '—' : fmtStat(c.value, c.unit)}</span>
+  </div>`).join('');
+
+  return back + head + `<div class="pf">${rows}</div>
+    <div class="mnote">The chalk mark on each bar is the median club in
+      ${esc(t.division)}; the bar runs from there to where ${esc(t.name)} sit, so length is the
+      gap and not the level. Rows in grey are below the sample that particular stat needs — which
+      is a question about the stat, not about the club. A side can have a meaningful break rate
+      and a meaningless hold rate at the same time, and usually does early on.</div>` +
+    squadBlock(p.squad) +
+    comboBlock(p.combos, null, 'Connections');
 }
 
 // --- leaderboards ----------------------------------------------------------
@@ -1250,6 +1451,7 @@ async function render() {
     else if (S.tab === 'bets') v.innerHTML = await renderBets();
     else if (S.tab === 'leaders') v.innerHTML = await renderLeaders();
     else if (S.tab === 'stats') v.innerHTML = await renderStats();
+    else if (S.tab === 'team') v.innerHTML = await renderTeam();
     else if (S.tab === 'admin') v.innerHTML = await renderAdmin();
     else if (S.tab === 'account') v.innerHTML = renderAccount();
     else if (S.tab === 'live') { await loadLive(); v.innerHTML = renderLive(); }

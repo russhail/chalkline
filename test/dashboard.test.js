@@ -3,7 +3,8 @@ import assert from 'node:assert/strict';
 import { createStore } from '../lib/store.js';
 import { handle } from '../lib/router.js';
 import { sync, syncGameDetail } from '../lib/sync.js';
-import { teamStats, playerLeaders, coverage, concentrationFor } from '../lib/dashboard.js';
+import { teamStats, playerLeaders, coverage, concentrationFor,
+         relianceFor, comboLeaders, teamProfile, median } from '../lib/dashboard.js';
 
 const NOW = Date.parse('2026-08-16T18:00:00Z');
 let store;
@@ -384,4 +385,268 @@ test('O and D time are reported per point as well as in total', async () => {
   // The totals survive — they just stop being the headline, because a total
   // mostly measures how many games a club has played.
   assert.ok(yaka.oTime > 0 && yaka.dTime > 0);
+});
+
+// --- D point length, split by outcome ---------------------------------------
+//
+// The single dSecsPerPoint average was the mean of two opposite virtues, so a
+// ruthless defence and a leaky one could land on the same number by opposite
+// routes. These pin the two halves apart.
+
+test('time to break and time to be held are separated, and still sum to D time', async () => {
+  const rows = await teamStats(store);
+  const yaka = rows.find((r) => r.teamId === 1047);
+  // Yaka broke on P1 (130s) and P2 (305s): mean 217.5, rounded 218.
+  assert.equal(yaka.secondsPerBreak, 218);
+  // Yaka were held on P3 (220s), P5 (145s) and P7 (675s): mean 346.7 -> 347.
+  assert.equal(yaka.secondsPerConcededHold, 347);
+  // Nothing is lost or double-counted in the split.
+  assert.equal(yaka.breakTime + yaka.concededTime, yaka.dTime);
+  assert.equal(yaka.breakClockN + yaka.concededClockN, yaka.dClockN);
+});
+
+test('a team that never broke reports no time-to-break rather than a zero', async () => {
+  const rows = await teamStats(store);
+  const blue = rows.find((r) => r.teamId === 1104);
+  assert.equal(blue.breaks, 0);
+  // Zero would sort as the fastest break in the tournament. Null is the truth.
+  assert.equal(blue.secondsPerBreak, null);
+  assert.equal(blue.breakClockN, 0);
+});
+
+test('one side taking time to hold is the other side taking time to be held', async () => {
+  const rows = await teamStats(store);
+  const yaka = rows.find((r) => r.teamId === 1047);
+  const blue = rows.find((r) => r.teamId === 1104);
+  // The same three points seen from both ends of the field: Yaka held P0, P4
+  // and P6, which are exactly the points Blueberries failed to break.
+  assert.equal(yaka.secondsPerHold, blue.secondsPerConcededHold);
+  assert.equal(yaka.holdTime, blue.concededTime);
+});
+
+// --- star reliance, split three ways ----------------------------------------
+
+test('goal reliance and assist reliance are different numbers about different risks', () => {
+  // One handler throwing nearly everything, six people finishing it. Pooled
+  // into goals-plus-assists this looks like an ordinary spread-out side.
+  const squad = [
+    { name: 'Handler', goals: 1, assists: 11, total: 12 },
+    { name: 'Cutter A', goals: 5, assists: 1, total: 6 },
+    { name: 'Cutter B', goals: 4, assists: 0, total: 4 },
+    { name: 'Cutter C', goals: 3, assists: 0, total: 3 },
+    { name: 'Cutter D', goals: 2, assists: 0, total: 2 },
+    { name: 'Cutter E', goals: 1, assists: 0, total: 1 },
+  ];
+  const r = relianceFor(squad);
+  assert.equal(r.goals.rate, 75);      // top three of 16 goals
+  assert.equal(r.assists.rate, 100);   // every assist came from two people
+  assert.equal(r.total.rate, 78.6);
+  // The combined figure sits between the two and hides the thing worth knowing.
+  assert.ok(r.assists.rate > r.total.rate && r.total.rate > r.goals.rate,
+    'the combined number conceals a side whose throwing is entirely two players');
+});
+
+test('contributors counts the people who did that particular thing', () => {
+  const squad = [
+    { name: 'Handler', goals: 1, assists: 11, total: 12 },
+    { name: 'Cutter A', goals: 5, assists: 1, total: 6 },
+    { name: 'Cutter B', goals: 4, assists: 0, total: 4 },
+    { name: 'Cutter C', goals: 3, assists: 0, total: 3 },
+    { name: 'Cutter D', goals: 2, assists: 0, total: 2 },
+    { name: 'Cutter E', goals: 1, assists: 0, total: 1 },
+  ];
+  const r = relianceFor(squad);
+  assert.equal(r.goals.contributors, 6);
+  // Not 6. Only two people in this squad have ever thrown an assist, and
+  // reporting six would make the tail look three times deeper than it is.
+  assert.equal(r.assists.contributors, 2);
+  assert.equal(r.assists.names.length, 2, 'no padding with players on zero');
+});
+
+test('each key is gated on its own volume, so half the sample earns half the confidence', () => {
+  // Eleven goals and eleven assists: 22 contributions, so the combined view
+  // clears the 12 gate while neither single-key view does.
+  const squad = [
+    { name: 'A', goals: 6, assists: 6, total: 12 },
+    { name: 'B', goals: 5, assists: 5, total: 10 },
+  ];
+  const r = relianceFor(squad);
+  assert.equal(r.total.rate, 100);
+  assert.equal(r.goals.rate, null, 'eleven goals is not yet twelve');
+  assert.equal(r.assists.rate, null);
+});
+
+test('the flat concentration fields still describe the combined view', async () => {
+  const rows = await teamStats(store);
+  const yaka = rows.find((r) => r.teamId === 1047);
+  assert.equal(yaka.concentration, yaka.reliance.total.rate);
+  assert.equal(yaka.topThree, yaka.reliance.total.part);
+  assert.equal(yaka.contributions, yaka.reliance.total.whole);
+  assert.equal(yaka.contributors, yaka.reliance.total.contributors);
+  // Yaka's five goals and four assists come from three players.
+  assert.equal(yaka.reliance.goals.whole, 5);
+  assert.equal(yaka.reliance.assists.whole, 4);
+  assert.equal(yaka.reliance.total.whole, 9);
+});
+
+// --- thrower to scorer ------------------------------------------------------
+
+test('combinations pair the assister with the scorer, not with the team', async () => {
+  const combos = await comboLeaders(store, { minGoals: 2 });
+  // Only one pair connected twice: 2160 threw to 2149 on P2 and again on P4.
+  assert.equal(combos.length, 1);
+  assert.equal(combos[0].goals, 2);
+  assert.equal(combos[0].assistName, 'A2160 Y');
+  assert.equal(combos[0].scorerName, 'S2149 X');
+  assert.equal(combos[0].teamId, 1047);
+  assert.equal(combos[0].team, 'NLSU Yaka');
+});
+
+test('a Callahan produces no combination, having no thrower', async () => {
+  const all = await comboLeaders(store, { minGoals: 1, limit: 50 });
+  // Eight goals, but P1 was a Callahan and carries no assist.
+  assert.equal(all.reduce((n, c) => n + c.goals, 0), 7);
+  assert.ok(all.every((c) => c.assistId && c.scorerId));
+});
+
+test('combinations can be scoped to one club', async () => {
+  const yaka = await comboLeaders(store, { teamId: 1047, minGoals: 1, limit: 50 });
+  const blue = await comboLeaders(store, { teamId: 1104, minGoals: 1, limit: 50 });
+  assert.ok(yaka.every((c) => c.teamId === 1047));
+  assert.ok(blue.every((c) => c.teamId === 1104));
+  assert.equal(yaka.reduce((n, c) => n + c.goals, 0), 4, 'five goals less the Callahan');
+  assert.equal(blue.reduce((n, c) => n + c.goals, 0), 3);
+});
+
+test('combinations come back in a stable order', async () => {
+  const a = await comboLeaders(store, { minGoals: 1, limit: 50 });
+  const b = await comboLeaders(store, { minGoals: 1, limit: 50 });
+  assert.deepEqual(a.map((c) => `${c.assistId}>${c.scorerId}`),
+                   b.map((c) => `${c.assistId}>${c.scorerId}`));
+  // Sorted by goals, most first.
+  const counts = a.map((c) => c.goals);
+  assert.deepEqual(counts, counts.slice().sort((x, y) => y - x));
+});
+
+// --- club profile -----------------------------------------------------------
+
+test('median is the middle value, not the mean', () => {
+  assert.equal(median([1, 2, 3]), 2);
+  assert.equal(median([1, 2, 3, 4]), 2.5);
+  // One blowout must not drag the benchmark the way a mean would.
+  assert.equal(median([10, 11, 12, 13, 100]), 12);
+  assert.equal(median([]), null);
+  assert.equal(median([null, undefined, NaN]), null);
+});
+
+test('a profile gathers one club and places it in its own division', async () => {
+  const p = await teamProfile(store, 1047);
+  assert.equal(p.team.name, 'NLSU Yaka');
+  assert.equal(p.team.division, "Women's");
+  assert.equal(p.divisionClubs, 2, 'both clubs in this division have traceable points');
+  assert.equal(p.stats.teamId, 1047);
+  // The squad is this club's players only, best first.
+  assert.ok(p.squad.length === 3);
+  assert.ok(p.squad.every((s) => s.teamId === 1047));
+  assert.deepEqual(p.squad.map((s) => s.total), [4, 3, 2]);
+});
+
+test('a club under the sample gate is marked thin rather than given a rank', async () => {
+  const p = await teamProfile(store, 1047);
+  // Three offensive points and five defensive ones clears no gate on the page.
+  const hold = p.context.find((c) => c.key === 'holdPct');
+  assert.equal(hold.thin, true);
+  assert.equal(hold.value, null);
+  assert.equal(hold.rank, null, 'a rank off four points would be a fiction');
+  assert.equal(hold.of, 0, 'nobody in the division qualifies yet either');
+  assert.equal(hold.median, null);
+  // Every stat carries which way is up, so the page cannot colour it backwards.
+  const broken = p.context.find((c) => c.key === 'brokenPct');
+  assert.equal(broken.lowerIsBetter, true);
+  const breaks = p.context.find((c) => c.key === 'breakPct');
+  assert.equal(breaks.lowerIsBetter, false);
+  // Reliance has no good end, and must never be coloured as if it did.
+  assert.equal(p.context.find((c) => c.key === 'reliance.total.rate').neutral, true);
+});
+
+test('a profile carries the club combinations with it', async () => {
+  const p = await teamProfile(store, 1047);
+  assert.ok(p.combos.every((c) => c.teamId === 1047));
+  assert.equal(p.combos.length, 1, 'one pair connected twice');
+});
+
+test('an unknown club is absent, not empty', async () => {
+  assert.equal(await teamProfile(store, 999999), null);
+});
+
+test('the profile endpoint answers, and refuses nonsense', async () => {
+  const good = await call('GET', '/api/team?id=1047');
+  assert.equal(good.status, 200);
+  assert.equal(good.body.team.name, 'NLSU Yaka');
+  assert.equal((await call('GET', '/api/team?id=999999')).status, 404);
+  assert.equal((await call('GET', '/api/team?id=nonsense')).status, 400);
+  assert.equal((await call('GET', '/api/team')).status, 400);
+});
+
+test('the stats payload carries combinations alongside the tables', async () => {
+  const res = await call('GET', '/api/stats');
+  assert.equal(res.status, 200);
+  const body = res.body;
+  assert.ok(Array.isArray(body.combos));
+  assert.equal(body.combos.length, 1);
+  assert.equal(body.combos[0].goals, 2);
+});
+
+test('timeout conversion separates the break it won from the hold it kept', async () => {
+  // A second copy of the game carrying three timeouts on a known chain:
+  //   500s  Yaka on defence -> P2 at 635s, Yaka score: a BREAK
+  //   700s  Blue on offence -> P3 at 855s, Blue score: a HOLD
+  //   1000s Blue            -> P4 at 1105s, Yaka score: nothing
+  const other = { ...GAME, id: 1277 };
+  await sync(store, {
+    force: true, now: NOW,
+    fetcher: async () => ({
+      heartbeat: { cacheVersion: 'v2' }, teams: TEAMS,
+      fieldSizes: { "Women's": 40 }, games: [other],
+    }),
+  });
+  await store.query('UPDATE games SET settled = TRUE WHERE id = 1277');
+  await syncGameDetail(store, {
+    fetcher: async () => ({
+      ...DETAIL,
+      game_result: { ...DETAIL.game_result, game_id: 1277 },
+      gameevents: [
+        { time: 0, ishome: 1, type: 'offence' },
+        { time: 500, ishome: 1, type: 'timeout' },
+        { time: 700, ishome: 0, type: 'timeout' },
+        { time: 1000, ishome: 0, type: 'timeout' },
+      ],
+    }),
+  });
+
+  const rows = await teamStats(store);
+  const yaka = rows.find((r) => r.teamId === 1047);
+  const blue = rows.find((r) => r.teamId === 1104);
+
+  // Yaka called one and turned it into a break.
+  assert.equal(yaka.timeouts, 1);
+  assert.equal(yaka.timeoutsBreak, 1);
+  assert.equal(yaka.timeoutsHold, 0);
+  assert.equal(yaka.timeoutBreakRate, 100);
+
+  // Blueberries called three across the two games and won one, on offence.
+  // Same 33.3% conversion as a side that had broken instead — which is the
+  // whole reason the single number was not enough.
+  assert.equal(blue.timeouts, 3);
+  assert.equal(blue.timeoutsConverted, 1);
+  assert.equal(blue.timeoutsBreak, 0);
+  assert.equal(blue.timeoutsHold, 1);
+  assert.equal(blue.timeoutConversion, 33.3);
+  assert.equal(blue.timeoutHoldRate, 33.3);
+  assert.equal(blue.timeoutBreakRate, 0);
+
+  // The splits are allowed not to sum to the conversions, and the gap is
+  // reported rather than silently folded into one side.
+  assert.equal(yaka.timeoutsUnattributed, 0);
+  assert.equal(blue.timeoutsUnattributed, 0);
 });

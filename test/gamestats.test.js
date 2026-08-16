@@ -232,3 +232,85 @@ test('an empty or malformed game does not throw', () => {
     assert.deepEqual(out.points, []);
   }
 });
+
+// --- what a converted timeout actually bought -------------------------------
+//
+// "Converted" covers two very different achievements. Calling one on defence
+// and then scoring is a break; calling one on offence and scoring is holding
+// the disc you already had. The second is what should have happened anyway.
+
+test('a timeout converted on defence is recorded as a break', () => {
+  const points = [
+    { timeS: 100, scoreTeam: 1, isBreak: false },
+    { timeS: 200, scoreTeam: 2, isBreak: true },
+  ];
+  const [out] = timeoutOutcomes(points, [{ timeS: 150, teamId: 2 }]);
+  assert.equal(out.converted, true);
+  assert.equal(out.wasBreak, true);
+});
+
+test('a timeout converted on offence is a hold, not a break', () => {
+  const points = [
+    { timeS: 100, scoreTeam: 1, isBreak: false },
+    { timeS: 200, scoreTeam: 2, isBreak: false },
+  ];
+  const [out] = timeoutOutcomes(points, [{ timeS: 150, teamId: 2 }]);
+  assert.equal(out.converted, true);
+  assert.equal(out.wasBreak, false);
+});
+
+test('an unconverted timeout has no break flag at all', () => {
+  const points = [{ timeS: 200, scoreTeam: 1, isBreak: true }];
+  const [out] = timeoutOutcomes(points, [{ timeS: 150, teamId: 2 }]);
+  assert.equal(out.converted, false);
+  // Not false. They did not fail to break; they failed to score, which is a
+  // different thing and belongs in a different column.
+  assert.equal(out.wasBreak, null);
+});
+
+test('a timeout won on an untraceable point is unknown, never a hold', () => {
+  // isBreak is null when the possession chain was never anchored, so we do
+  // not know which line was out. Reading that as false would quietly file
+  // every one of them under holds and understate breaks across the board.
+  const points = [{ timeS: 200, scoreTeam: 2, isBreak: null }];
+  const [out] = timeoutOutcomes(points, [{ timeS: 150, teamId: 2 }]);
+  assert.equal(out.converted, true);
+  assert.equal(out.wasBreak, null);
+});
+
+test('a timeout with no point after it converts nothing', () => {
+  const [out] = timeoutOutcomes([{ timeS: 100, scoreTeam: 1, isBreak: false }],
+                                [{ timeS: 150, teamId: 2 }]);
+  assert.equal(out.converted, null);
+  assert.equal(out.wasBreak, null);
+});
+
+test('the real chain decides what a timeout bought, point by point', () => {
+  // Three timeouts placed on the real possession chain of game 1276:
+  //   500s  Yaka, on defence  -> P2 at 635s, Yaka score, a BREAK
+  //   700s  Blue, on offence  -> P3 at 855s, Blue score, a HOLD
+  //   1000s Blue              -> P4 at 1105s, Yaka score, nothing
+  const withTimeouts = {
+    ...REAL,
+    gameevents: [
+      ...REAL.gameevents,
+      { time: 500, ishome: 1, type: 'timeout' },
+      { time: 700, ishome: 0, type: 'timeout' },
+      { time: 1000, ishome: 0, type: 'timeout' },
+    ],
+  };
+  const { points } = derivePoints(withTimeouts);
+  const outs = timeoutOutcomes(points, deriveTimeouts(withTimeouts));
+  assert.equal(outs.length, 3);
+
+  const [yaka, blueHold, blueMiss] = outs;
+  assert.deepEqual(
+    { teamId: yaka.teamId, converted: yaka.converted, wasBreak: yaka.wasBreak },
+    { teamId: 1047, converted: true, wasBreak: true });
+  assert.deepEqual(
+    { teamId: blueHold.teamId, converted: blueHold.converted, wasBreak: blueHold.wasBreak },
+    { teamId: 1104, converted: true, wasBreak: false });
+  assert.deepEqual(
+    { teamId: blueMiss.teamId, converted: blueMiss.converted, wasBreak: blueMiss.wasBreak },
+    { teamId: 1104, converted: false, wasBreak: null });
+});
