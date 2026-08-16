@@ -1,0 +1,10 @@
+*.db
+*.db-*
+.env
+.env*
+.vercel
+node_modules
+public/_probe.html
+shot-*.png
+_to_delete
+*.zip

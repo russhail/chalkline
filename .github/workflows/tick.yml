@@ -1,0 +1,41 @@
+# Keeps the board fresh when nobody is looking at it.
+#
+# The site refreshes itself whenever someone loads the board, so this only
+# matters during quiet spells — overnight, or between sessions. That is exactly
+# when bets from the last game of the day would otherwise sit unsettled.
+#
+# GitHub's scheduler is not punctual: a */2 schedule can run several minutes
+# late, and under load it drops runs entirely. That is fine here. /api/tick is
+# rate-limited server-side to one real sync every three minutes and returns
+# "not due" otherwise, so over-calling is free and under-calling is the only
+# failure mode worth guarding against. Hence the inner loop: one workflow run
+# pings every 30 seconds for five minutes, so a late or dropped schedule
+# leaves a gap of minutes rather than of hours.
+name: tick
+
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: tick
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - name: Ping /api/tick for five minutes
+        run: |
+          for i in $(seq 1 10); do
+            code=$(curl -sS -o /tmp/out.json -w '%{http_code}' \
+              --max-time 60 \
+              'https://www.chalklineultimate.com/api/tick' || echo 000)
+            echo "$(date -u +%H:%M:%S)  HTTP $code  $(head -c 200 /tmp/out.json)"
+            [ "$i" -lt 10 ] && sleep 30
+          done
+          # Fail the run only if the very last call failed, so a single blip
+          # doesn't turn the Actions tab into a wall of red.
+          case "$code" in 2*) exit 0 ;; *) echo "last ping failed"; exit 1 ;; esac
