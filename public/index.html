@@ -183,8 +183,10 @@ main{max-width:900px;margin:0 auto;padding:14px 12px 120px}
   vertical-align:-1px}
 .dsh .dkey b{margin-left:auto;color:var(--text);font-weight:800}
 .rl-shape{position:relative;display:block;height:17px;margin:7px 0 5px}
-.rl-shape s{position:absolute;left:50%;top:-2px;bottom:-2px;width:2px;text-decoration:none;
-  background:var(--chalk);opacity:.5;transform:translateX(-1px)}
+.rl-shape s{position:absolute;top:-2px;bottom:-2px;width:2px;text-decoration:none;
+  background:var(--chalk);opacity:.55;transform:translateX(-1px)}
+.rl-shape u{position:absolute;top:1px;bottom:1px;width:1px;text-decoration:none;
+  background:var(--dim);opacity:.5;transform:translateX(-.5px)}
 .rl-shape i{position:absolute;height:6px;border-radius:99px}
 .rl-shape i.b{top:1px;background:var(--brk)}
 .rl-shape i.c{top:10px;background:var(--con)}
@@ -510,7 +512,7 @@ function onSearch(v) {
 function renderKeepingFocus() {
   const el = $('#q');
   const pos = el?.selectionStart;
-  $('#view').innerHTML = renderBoard();
+  $('#view').innerHTML = searchHost();
   const again = $('#q');
   if (again && el === document.activeElement || S.query) {
     again?.focus();
@@ -520,8 +522,16 @@ function renderKeepingFocus() {
 
 function clearSearch() {
   S.query = ''; S.results = null;
-  $('#view').innerHTML = renderBoard();
+  $('#view').innerHTML = searchHost();
 }
+
+// Search sits on both the board and the live tab, so a redraw has to come back
+// to whichever one the visitor is actually on. Both callers used to say
+// renderBoard() flatly. That was invisible while a query was active — the
+// board defers to renderSearch anyway — but it dropped a live viewer onto the
+// board the instant they cleared the box, or backspaced to one character.
+// Synchronous on purpose: neither caller should refetch, and render() would.
+const searchHost = () => (S.tab === 'live' ? renderLive() : renderBoard());
 
 function renderSearch() {
   let html = searchBar();
@@ -627,8 +637,16 @@ const STAT_VIEWS = [
     note: 'Thrower first, then the scorer. Both ends of every goal are in the WFDF feed, so these pairs have been sitting in the data all tournament — they only become visible once every game is pooled, because a partnership is not a fact about any single game. Pairs who have connected at least twice.' },
 
   { key: 'timeouts', label: 'After a timeout',
-    note: 'Whether calling a timeout actually wins you the next point. Taking them is not the story — every side takes them, and a club that calls four is not doing better or worse than one that calls two. The rail is the points that followed a timeout and the lit part is the ones they went on to score. The line underneath splits those wins into breaks and holds, which are not the same achievement: winning the next point on defence takes the disc off someone, winning it on offence keeps the disc you already had. Small samples are visibly small: a short rail is a couple of timeouts and no more.',
-    part: (t) => t.timeoutsConverted, whole: (t) => t.timeouts, rate: (t) => t.timeoutConversion, min: 5,
+    note: 'Whether calling a timeout actually wins you the next point. Taking them is not the story — every side takes them, and a club that calls four is not doing better or worse than one that calls two. The rail is the points that followed a timeout and the lit part is the ones they went on to score. The line underneath splits those wins into breaks and holds, which are not the same achievement: winning the next point on defence takes the disc off someone, winning it on offence keeps the disc you already had. Small samples are visibly small: a short rail is a couple of timeouts and no more, which is why nothing on this view is greyed out — every club here is working from a handful of timeouts, so singling some out as short-sampled would imply the rest are not.',
+    // No sample gate, deliberately. Everywhere else a threshold separates
+    // clubs with enough of something from clubs without, but every timeout
+    // sample is small — a side calls three or four in a game — so a cut at
+    // five would be dividing small from slightly-less-small and dressing it
+    // up as a distinction. The rail already carries the honest version of the
+    // warning: its length IS the number of timeouts, so a club with two has a
+    // stub and nobody needs telling twice.
+    part: (t) => t.timeoutsConverted, whole: (t) => t.timeouts, rate: (t) => t.timeoutConversion,
+    min: 0,
     fmt: (t) => (t.timeouts ? pctText(t.timeoutConversion) : '—'),
     sub: (t) => {
       if (!t.timeouts) return 'no timeouts called';
@@ -646,6 +664,26 @@ const dGap = (t) => (t.secondsPerBreak === null || t.secondsPerBreak === undefin
   || t.secondsPerConcededHold === null || t.secondsPerConcededHold === undefined)
   ? null : t.secondsPerConcededHold - t.secondsPerBreak;
 
+// How much of the rail each arm may use, which is also what is left over for
+// the centre to travel in. Splitting the width between the two encodings is
+// the whole design: neither can have all of it.
+const ARM_MAX = 26;
+
+// Where a club's own average defensive point sits against the rest of its
+// division, as a percentage across the rail.
+//
+// This is the second thing each row says. Pace-adjusting the arms deliberately
+// threw tempo away — that was right, because it stopped the column ranking
+// clubs by how fast they play — but thrown away entirely it left two clubs
+// forty seconds apart looking identical. Putting tempo back as the POSITION of
+// the centre restores it without letting it contaminate the arms: horizontal
+// placement is absolute, arm length is relative to self, and the two never mix.
+function centreAt(own, pace) {
+  if (!pace || !Number.isFinite(own) || pace.hi === pace.lo) return 50;
+  const t = (own - pace.lo) / (pace.hi - pace.lo);
+  return ARM_MAX + Math.min(Math.max(t, 0), 1) * (100 - 2 * ARM_MAX);
+}
+
 // The two arms, both measured from the club's own average defensive point.
 // `span` is shared by every row in the block so lengths compare down it, and
 // is recomputed per division for the same reason the rails are.
@@ -655,17 +693,22 @@ const dGap = (t) => (t.secondsPerBreak === null || t.secondsPerBreak === undefin
 // drawn, so it necessarily sits between them. A row can never show both bars
 // the same way, which is what keeps the column scannable — the eye reads one
 // shape flipping over, not two independent lengths.
-function shapeRail(t, span) {
+function shapeRail(t, span, pace) {
   const own = t.dSecsPerPoint;
   if (own === null || own === undefined || dGap(t) === null) {
     return '<span class="rl-shape"></span>';
   }
+  const mid = centreAt(own, pace);
   const arm = (v) => {
     const dev = v - own;
-    const w = Math.min(Math.abs(dev) / span, 1) * 50;
-    return `left:${dev < 0 ? 50 - w : 50}%;width:${Math.max(w, 1.2)}%`;
+    const w = Math.min(Math.abs(dev) / span, 1) * ARM_MAX;
+    return `left:${dev < 0 ? mid - w : mid}%;width:${Math.max(w, 1.2)}%`;
   };
-  return `<span class="rl-shape"><s></s>` +
+  // The faint tick is the division's median club, so a centre can be read as
+  // fast or slow without counting along the axis.
+  const guide = pace && Number.isFinite(pace.median)
+    ? `<u style="left:${centreAt(pace.median, pace)}%"></u>` : '';
+  return `<span class="rl-shape">${guide}<s style="left:${mid}%"></s>` +
     `<i class="b" style="${arm(t.secondsPerBreak)}"></i>` +
     `<i class="c" style="${arm(t.secondsPerConcededHold)}"></i></span>`;
 }
@@ -766,14 +809,21 @@ async function renderStats() {
        <b>172s</b> to concede, so breaking is the <i>slower</i> of the two and only 9 clubs in 47
        concede more slowly than they break — a break needs a turnover and usually several
        exchanges, while being held can be four passes. That is why a positive gap is the unusual
-       one. Bars are scaled within each division block, so lengths compare down a block and never
-       across two.</div>`
+       one. Each row says two things at once: WHERE the chalk mark sits is how long this club's
+       defensive points run against the rest of the division, left for quick and right for slow,
+       with the faint tick marking the median club. HOW FAR the bars reach from it is the split
+       between the two outcomes, measured against the club itself. Position is absolute, length is
+       relative, and keeping them apart is what stops tempo leaking into the comparison. Both
+       scales are per division block, so nothing compares across two.</div>`
     : '';
   const shapeKey = view.shape
     ? `<div class="shapekey">
          <span><i style="background:var(--brk)"></i>their breaks</span>
          <span><i style="background:var(--con)"></i>their concessions</span>
-         <span>&larr; quicker than their own normal &middot; slower &rarr;</span>
+         <span><i style="background:var(--chalk);border-radius:0;width:2px;height:10px"></i>their
+           own average D point &mdash; further right means longer</span>
+         <span><i style="background:var(--dim);border-radius:0;width:1px;height:10px"></i>the
+           division's median club</span>
        </div>`
     : '';
   const scaleNote = (view.plain || view.shape) ? ''
@@ -821,14 +871,23 @@ function statTable(rows, view, division, totalInDivision) {
   const totWhole = view.plain ? 0 : rows.reduce((n, t) => n + (view.whole(t) || 0), 0);
   const par = totWhole > 0 ? totPart / totWhole : 0;
   const maxWhole = view.plain ? 0 : Math.max(1, ...rows.map((t) => view.whole(t) || 0));
-  // One scale for the whole block, or the bars would not compare down it.
-  let shapeSpan = null;
+  // Two scales for the block, one per encoding: how long an arm may get, and
+  // where a centre may sit. Both are per-division, like every other rail here.
+  let shapeSpan = null, shapePace = null;
   if (view.shape) {
-    const devs = rows.filter((t) => enough(view, t) && dGap(t) !== null
-        && Number.isFinite(t.dSecsPerPoint))
-      .flatMap((t) => [Math.abs(t.secondsPerBreak - t.dSecsPerPoint),
-                       Math.abs(t.secondsPerConcededHold - t.dSecsPerPoint)]);
+    const usable = rows.filter((t) => enough(view, t) && dGap(t) !== null
+      && Number.isFinite(t.dSecsPerPoint));
+    const devs = usable.flatMap((t) => [Math.abs(t.secondsPerBreak - t.dSecsPerPoint),
+                                        Math.abs(t.secondsPerConcededHold - t.dSecsPerPoint)]);
     shapeSpan = Math.max(20, ...devs) * 1.15;
+    const paces = usable.map((t) => t.dSecsPerPoint).sort((a, b) => a - b);
+    if (paces.length) {
+      const m = paces.length >> 1;
+      shapePace = {
+        lo: paces[0], hi: paces[paces.length - 1],
+        median: paces.length % 2 ? paces[m] : (paces[m - 1] + paces[m]) / 2,
+      };
+    }
   }
 
   let parPlain = null;
@@ -852,7 +911,7 @@ function statTable(rows, view, division, totalInDivision) {
       <span class="rl-main">
         <span class="rl-name">${teamLink({ id: t.teamId, name: t.name })}
           <span class="ctry">${esc(t.country || '')}</span></span>
-        ${view.shape ? shapeRail(t, shapeSpan) : view.plain ? '' : `<span class="rl-rail">
+        ${view.shape ? shapeRail(t, shapeSpan, shapePace) : view.plain ? '' : `<span class="rl-rail">
           <i class="rl-w" style="width:${(whole / maxWhole) * 100}%"></i>
           <i class="rl-p ${view.neutral ? 'neutral' : (good ? '' : 'under')}"
              style="width:${(part / maxWhole) * 100}%"></i>
@@ -1212,13 +1271,14 @@ async function loadLive() {
 }
 
 function renderLive() {
+  if (S.query) return renderSearch();
   if (!S.live?.length) {
-    return `<div class="empty">Nothing in progress.<br>
+    return searchBar() + `<div class="empty">Nothing in progress.<br>
       <span style="font-size:12px">Games move here from Upcoming the moment they start.</span>
       <div style="margin-top:16px"><button class="btn ghost" onclick="go('board')">
         See upcoming games</button></div></div>`;
   }
-  return `<div class="livenote"><strong>These games have already started.</strong>
+  return searchBar() + `<div class="livenote"><strong>These games have already started.</strong>
     The percentages are the model's, recalculated from the score and how much of the game
     is left, so they swing hard late in a close one. Scores reach us a few seconds after
     they reach whoever is pitch-side.</div>` +
@@ -1419,6 +1479,7 @@ async function render() {
   // is ten seconds, so there's nothing to gain by going faster.
   setInterval(async () => {
     if (!visible()) return;
+    if (S.tab === 'live' && S.query) return;
     if (S.tab === 'live') { await loadLive(); $('#view').innerHTML = renderLive(); }
     else { try { const d = await api('/live'); S.liveCount = (d.games || []).length; renderChrome(); }
            catch {} }
