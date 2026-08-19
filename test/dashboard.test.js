@@ -4,7 +4,8 @@ import { createStore } from '../lib/store.js';
 import { handle } from '../lib/router.js';
 import { sync, syncGameDetail } from '../lib/sync.js';
 import { teamStats, playerLeaders, coverage, concentrationFor,
-         relianceFor, comboLeaders, teamProfile, median, dShapeFor } from '../lib/dashboard.js';
+         relianceFor, comboLeaders, teamProfile, median, dShapeFor,
+         playerTallies } from '../lib/dashboard.js';
 
 const NOW = Date.parse('2026-08-16T18:00:00Z');
 let store;
@@ -843,4 +844,48 @@ test('a point we cannot attribute still moves the scoreboard for the ones we can
   assert.equal(yaka.scoreState.level.dPoints, 0);
   assert.equal(yaka.scoreState.level.oPoints, 1, 'just the one, from the marked game');
   assert.equal(yaka.scoreState.behind.dPoints, 0);
+});
+
+test('a player whose name is spelt differently in two games keeps both his goals', async () => {
+  // The tallies group in SQL by (id, name, team), so one player comes back as
+  // two rows the moment a scorekeeper types the name differently — an accent
+  // dropped, a surname abbreviated. The accumulator is keyed on the id alone,
+  // so the second row used to overwrite the first instead of adding to it, and
+  // the earlier game's goals vanished without trace.
+  const second = { ...GAME, id: 1290 };
+  await sync(store, {
+    force: true, now: NOW,
+    fetcher: async () => ({
+      heartbeat: { cacheVersion: 'vname' }, teams: TEAMS,
+      fieldSizes: { "Women's": 40 }, games: [second],
+    }),
+  });
+  // Same player id 2160, spelt differently, scoring twice more.
+  await syncGameDetail(store, {
+    fetcher: async () => ({
+      game_result: { game_id: 1290, hometeam: 1047, visitorteam: 1104, halftime: null },
+      gameevents: [{ time: 0, ishome: 1, type: 'offence' }],
+      goals: [
+        { num: 0, time: 200, ishomegoal: 1, scorer: 2160, assist: 2144, iscallahan: 0,
+          scorerfirstname: 'S2160', scorerlastname: 'Ex',
+          assistfirstname: 'A2144', assistlastname: 'Wye' },
+        { num: 1, time: 400, ishomegoal: 1, scorer: 2160, assist: 2144, iscallahan: 0,
+          scorerfirstname: 'S2160', scorerlastname: 'Ex',
+          assistfirstname: 'A2144', assistlastname: 'Wye' },
+      ],
+    }),
+  });
+
+  const players = await playerTallies(store);
+  const rows = players.filter((p) => p.playerId === 2160);
+  assert.equal(rows.length, 1, 'one player, however many ways the feed spells him');
+  // Two goals in game 1276 under one spelling, two more here under another.
+  assert.equal(rows[0].goals, 4, 'both spellings must be added, not one overwritten');
+
+  // And the club total has to agree with a straight count of its points.
+  const [{ n } = {}] = await store.query(
+    'SELECT COUNT(*) AS n FROM points WHERE score_team_id = 1047 AND scorer_id IS NOT NULL');
+  const yaka = (await teamStats(store)).find((t) => t.teamId === 1047);
+  assert.equal(yaka.reliance.goals.whole, Number(n),
+    'the club goal total must equal the number of goals actually stored');
 });
