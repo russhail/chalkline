@@ -207,42 +207,46 @@ test('the upcoming board reports how many games are in play', async () => {
   assert.equal(after.body.liveNow, 1, 'so the board can point at them instead of hiding them');
 });
 
-test('the live board publishes a price for both sides, never one derived in the browser', async () => {
+test('the live board publishes a probability for both sides, and they sum to one', async () => {
   await goLive({ home: 8, away: 6 });
   const g = (await call('GET', '/api/live')).body.games[0];
   for (const side of ['home', 'away']) {
-    assert.equal(typeof g[side].decimal, 'number',
-      `${side} must carry a server-priced decimal — the browser has no floor to apply`);
+    assert.equal(typeof g[side].prob, 'number', `${side} must carry a probability`);
   }
+  assert.equal(Math.round((g.home.prob + g.away.prob) * 1e4), 1e4,
+    'the two sides are the same claim from opposite ends and must not sum to more than one');
+  // The decimal price that used to ride alongside is gone with the betting.
+  assert.ok(!('decimal' in g.home) && !('decimal' in g.away),
+    'a site nobody can bet on has no business quoting a price');
 });
 
-test('no live price ever pays less than the stake', async () => {
-  // The bug this guards: the browser derived odds as 1/(prob * 1.05) with no
-  // floor, so a side at 96% showed 0.96 — a winning bet that loses money.
-  // Walk a game to every plausible scoreline and check the whole ladder.
+test('the live probability stays a probability at every scoreline', async () => {
+  // What this replaces: the browser once derived its own odds with no floor,
+  // so a side at 96% was shown at 0.96 — a winning bet that lost money. There
+  // is no price to get wrong any more, but the number underneath it still has
+  // to behave, and a game walked to its extremes is where it would not.
   let version = 100;
   for (const [home, away] of [[14, 0], [14, 2], [14, 13], [10, 4], [7, 7], [2, 11], [0, 14]]) {
     version += 1;
     await goLive({ home, away, version: `v${version}` });
     const g = (await call('GET', '/api/live')).body.games[0];
     for (const side of ['home', 'away']) {
-      const d = g[side].decimal;
-      assert.ok(d >= 1.02,
-        `${home}-${away} ${side} priced at ${d}; nothing may pay under 1.02`);
-      assert.ok(d <= 12, `${home}-${away} ${side} priced at ${d}; over the cap`);
+      const p = g[side].prob;
+      assert.ok(p >= 0 && p <= 1, `${home}-${away} ${side} probability ${p} is off the scale`);
     }
+    assert.equal(Math.round((g.home.prob + g.away.prob) * 1e4), 1e4,
+      `${home}-${away} does not sum to one`);
   }
 });
 
-test('the live board and the pricing engine quote the same game the same way', async () => {
-  await goLive({ home: 13, away: 3 });
-  const g = (await call('GET', '/api/live')).body.games[0];
-  // The board prices in the route and the engine prices in betting.js, from the
-  // same score. Two pricing paths that can drift apart are how the browser once
-  // came to show 0.96 for a heavy favourite, so they are pinned to each other.
-  const q = await quote(store, 1, { clock: () => NOW });
-  assert.equal(g.home.decimal, q.inPlay.home.decimal);
-  assert.equal(g.away.decimal, q.inPlay.away.decimal);
+test('the live probability follows the score', async () => {
+  await goLive({ home: 13, away: 3, version: 'ahead' });
+  const ahead = (await call('GET', '/api/live')).body.games[0].home.prob;
+  await goLive({ home: 3, away: 13, version: 'behind' });
+  const behind = (await call('GET', '/api/live')).body.games[0].home.prob;
+  assert.ok(ahead > behind,
+    'ten points up must read better than ten points down, whatever the ratings say');
+  assert.ok(ahead > 0.9 && behind < 0.1, 'and at 13-3 it should be close to settled');
 });
 
 test('the live board marks a game decided the moment the score reaches the target', async () => {
@@ -272,18 +276,3 @@ test('under the time cap a game is not decided until the extra point lands', asy
   assert.equal(done.decided, true, 'the cap target has now been reached');
 });
 
-test('positions stay visible between points instead of flickering', async () => {
-  const { userId } = await punter('Watcher');
-  await goLive({ home: 5, away: 4, secondsAgo: 60, version: 'r1' });
-  await placeBet(store, { userId, gameId: 1, side: 'home', stake: 100, clock: () => NOW });
-
-  const open = await call('GET', '/api/game/1');
-  assert.equal(open.body.revealed, true, 'a game under way shows everyone their positions');
-  assert.equal(open.body.bets.length, 1);
-
-  // A point just scored suspends betting. That must not hide the bets.
-  await goLive({ home: 6, away: 4, secondsAgo: 1, version: 'r2' });
-  const paused = await call('GET', '/api/game/1');
-  assert.equal(paused.body.revealed, true, 'a 20-second suspension is not a reason to hide them');
-  assert.equal(paused.body.bets.length, 1);
-});

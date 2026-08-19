@@ -696,7 +696,12 @@ const STAT_VIEWS = [
       const split = (t.timeoutsBreak || t.timeoutsHold)
         ? ` · ${t.timeoutsBreak} break${t.timeoutsBreak === 1 ? '' : 's'}, ${t.timeoutsHold} hold${t.timeoutsHold === 1 ? '' : 's'}`
         : '';
-      return `scored ${t.timeoutsConverted} of the ${t.timeouts} that followed${split}`;
+      // Converted on a point whose possession chain was never anchored, so we
+      // cannot say which line was out. Without this the two halves silently
+      // fail to add up to the conversions above them.
+      const lost = t.timeoutsUnattributed
+        ? `, ${t.timeoutsUnattributed} untraceable` : '';
+      return `scored ${t.timeoutsConverted} of the ${t.timeouts} that followed${split}${lost}`;
     } },
 ];
 
@@ -873,12 +878,33 @@ async function renderStats() {
         return statTable(rows.slice(0, 10), view, div, rows.length);
       }).join('');
 
+  // Measured from the payload on screen, not written into the copy. These were
+  // hardcoded from a one-off analysis on day two, which meant the page would
+  // keep asserting day-two figures for the rest of the tournament.
+  const dFacts = (() => {
+    const ok = d.teams.filter((t) => (t.breakClockN || 0) >= 5 && (t.concededClockN || 0) >= 5
+      && Number.isFinite(t.secondsPerBreak) && Number.isFinite(t.secondsPerConcededHold));
+    if (ok.length < 5) return null;
+    const med = (a) => {
+      const v = a.slice().sort((x, y) => x - y), m = v.length >> 1;
+      return Math.round(v.length % 2 ? v[m] : (v[m - 1] + v[m]) / 2);
+    };
+    return {
+      brk: med(ok.map((t) => t.secondsPerBreak)),
+      con: med(ok.map((t) => t.secondsPerConcededHold)),
+      slower: ok.filter((t) => t.secondsPerConcededHold > t.secondsPerBreak).length,
+      n: ok.length,
+    };
+  })();
   const dNote = view.shape
-    ? `<div class="mnote">Tournament-wide the median club takes <b>212s</b> to break and
-       <b>172s</b> to concede, so breaking is the <i>slower</i> of the two and only 9 clubs in 47
-       concede more slowly than they break — a break needs a turnover and usually several
-       exchanges, while being held can be four passes. That is why a positive gap is the unusual
-       one. Each row says two things at once: WHERE the chalk mark sits is how long this club's
+    ? `<div class="mnote">${dFacts ? `Across the ${dFacts.n} clubs with enough of both, the median
+       takes <b>${dFacts.brk}s</b> to break and <b>${dFacts.con}s</b> to concede${
+         dFacts.brk === dFacts.con
+           ? ', which is to say neither is reliably the longer of the two so far'
+           : `, so breaking is the <i>${dFacts.brk > dFacts.con ? 'slower' : 'quicker'}</i> of the
+              two`} and ${dFacts.slower} of them concede more slowly than they break — a break
+       needs a turnover and usually several exchanges, while being held can be four passes. ` : ''}Each row says two
+       things at once: WHERE the chalk mark sits is how long this club's
        defensive points run against the rest of the division, left for quick and right for slow,
        with the faint tick marking the median club. HOW FAR the bars reach from it is the split
        between the two outcomes, measured against the club itself. Position is absolute, length is

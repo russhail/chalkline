@@ -236,3 +236,30 @@ test('a ranked club carries the identity and the uncertainty behind its rating',
   // number cannot support.
   assert.ok(top.rd > 0, 'the uncertainty must be on the row');
 });
+
+test('a game still being played is not served as a result', async () => {
+  // The standings file publishes the RUNNING score of a game in progress, and
+  // syncGames writes it straight into home_score/away_score. A predicate of
+  // "has a score" therefore served a game still on the pitch as a finished
+  // one — 6-3 rendered as a final result. Only games somebody has declared
+  // over belong here: the feed calling them final, or an admin voiding them.
+  await store.query(
+    `INSERT INTO games (id, home_team_id, away_team_id, division, pool_name, starts_at,
+                        status, home_score, away_score, settled, voided)
+     VALUES (90, 1131, 1109, 'Open', 'Pool A', '2026-08-15T11:00:00Z', 'live', 6, 3, FALSE, FALSE)`);
+
+  const body = await read('/api/results?day=2026-08-15');
+  assert.equal(body.games.find((g) => g.id === 90), undefined,
+    'a running score is not a result');
+  assert.equal(body.days.find((d) => d.day === '2026-08-15').games, 3,
+    'and it is not counted in the day index either');
+});
+
+test('a malformed day is refused rather than handed to the database', async () => {
+  // The day is interpolated into timestamp bounds. Postgres rejects a bad one
+  // with a 500; SQLite compares strings and quietly returns nothing, so this
+  // was green in every test and broken in production.
+  const res = await handle({ method: 'GET', url: '/api/results?day=nonsense', headers: {} },
+    { store, now: NOW, autoSync: false });
+  assert.equal(res.status, 400);
+});

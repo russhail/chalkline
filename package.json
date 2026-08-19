@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "version": "1.0.0",
-  "description": "Play-money betting on every game at WUCC 2026",
+  "description": "Point-by-point stats and model predictions for WUCC 2026",
   "engines": { "node": ">=22" },
   "scripts": {
     "dev": "node server.js",

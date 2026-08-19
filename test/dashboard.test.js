@@ -809,3 +809,38 @@ test('the Callahan is absent from connection depth, having no thrower', async ()
   assert.equal(yaka.reliance.goals.whole, 5);
   assert.equal(yaka.assistedGoals, 4);
 });
+
+test('a point we cannot attribute still moves the scoreboard for the ones we can', async () => {
+  // A game with no opening marker has an unanchored point sitting in the
+  // MIDDLE of its scoreboard. It cannot be bucketed, because we do not know
+  // which side was on offence — but the goal was scored, and every later point
+  // has to be read against a score that includes it. Walking only the anchored
+  // rows left the rest of the game measured against a score short by one, and
+  // silently moved points between the behind/level/ahead buckets.
+  const unmarked = { ...GAME, id: 1281 };
+  await sync(store, {
+    force: true, now: NOW,
+    fetcher: async () => ({
+      heartbeat: { cacheVersion: 'vsc' }, teams: TEAMS,
+      fieldSizes: { "Women's": 40 }, games: [unmarked],
+    }),
+  });
+  await syncGameDetail(store, {
+    fetcher: async () => ({
+      ...DETAIL, game_result: { ...DETAIL.game_result, game_id: 1281 }, gameevents: [],
+    }),
+  });
+
+  const [p0] = await store.query('SELECT anchored FROM points WHERE game_id = 1281 AND num = 0');
+  assert.ok(!p0.anchored, 'the opening point is the one that cannot be placed');
+
+  const yaka = (await teamStats(store)).find((r) => r.teamId === 1047);
+  // Yaka led from the first goal of both games. In 1276 they were the offence
+  // for the only level point; in 1281 that point is unanchored and bucketed
+  // nowhere. So they have no defensive point at level — which is only true if
+  // the unanchored goal advanced the score before point 1 was bucketed. With
+  // the bug, point 1 of game 1281 reads 0-0 and lands in `level`.
+  assert.equal(yaka.scoreState.level.dPoints, 0);
+  assert.equal(yaka.scoreState.level.oPoints, 1, 'just the one, from the marked game');
+  assert.equal(yaka.scoreState.behind.dPoints, 0);
+});

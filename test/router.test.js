@@ -152,20 +152,6 @@ test('the board prices every open game', async () => {
   assert.ok(!('staked' in g) && !('spreads' in g));
 });
 
-test('bets are hidden until the game locks, then revealed', async () => {
-  const { userId } = await account();
-  await placeBet(store, { userId, gameId: 1, side: 'home', stake: 500, clock: () => NOW });
-
-  const before = await call('GET', '/api/game/1');
-  assert.equal(before.body.revealed, false);
-  assert.equal(before.body.bets.length, 0);
-
-  const after = await call('GET', '/api/game/1', { now: Date.parse('2026-08-16T14:00:01Z') });
-  assert.equal(after.body.revealed, true);
-  assert.equal(after.body.bets.length, 1);
-  assert.equal(after.body.bets[0].display_name, 'Russ');
-});
-
 test('admin endpoints are closed to ordinary punters', async () => {
   const { cookie } = await account();
   for (const [method, path, body] of [
@@ -342,7 +328,6 @@ test('no public endpoint exposes an email address', async () => {
 
   const endpoints = [
     ['GET', '/api/games', undefined],
-    ['GET', '/api/game/1', undefined],
     ['GET', '/api/rankings', undefined],
     ['GET', '/api/search?q=colony', undefined],
     ['GET', '/api/health', undefined],
@@ -360,18 +345,9 @@ test('no public endpoint exposes an email address', async () => {
   }
 });
 
-test('the revealed bet feed shows names only, never contact details', async () => {
-  const { userId } = await account('Russ', 'russ@example.com');
-  await placeBet(store, { userId, gameId: 1, side: 'home', stake: 500, clock: () => NOW });
-  const res = await call('GET', '/api/game/1', { now: Date.parse('2026-08-16T15:00:00Z') });
-  assert.equal(res.body.revealed, true);
-  assert.deepEqual(Object.keys(res.body.bets[0]).sort(),
-    ['display_name', 'odds', 'side', 'stake', 'status']);
-});
-
 test('the recovery hash never leaves the server either', async () => {
   const { cookie } = await account();
-  for (const path of ['/api/me', '/api/game/1', '/api/rankings']) {
+  for (const path of ['/api/me', '/api/rankings', '/api/results']) {
     const res = await call('GET', path, { cookie });
     const body = JSON.stringify(res.body);
     assert.ok(!body.includes('scrypt'), `${path} leaked a password hash`);
@@ -494,34 +470,26 @@ test('nobody is an admin by default', async () => {
   assert.equal(res.body.user.isAdmin, false);
 });
 
-test('another player cannot see whether you are an admin', async () => {
-  const { userId } = await account('Boss');
+test('no public endpoint leaks whether an account is an admin', async () => {
+  // This used to be checked against the bet feed, which is gone with the
+  // betting. The concern outlived the surface: admin status is what guards
+  // settling and voiding, and it must not be discoverable from outside.
+  await account('Boss');
   await store.query('UPDATE users SET is_admin = TRUE WHERE display_name = $1', ['Boss']);
-  await placeBet(store, { userId, gameId: 1, side: 'home', stake: 100, clock: () => NOW });
 
-  const feed = await call('GET', '/api/game/1', { now: Date.parse('2026-08-16T15:00:00Z') });
-  assert.equal(feed.body.bets.length, 1, 'the feed has to be showing something to be a leak');
-  assert.ok(!JSON.stringify(feed.body).includes('is_admin'));
+  for (const path of ['/api/games', '/api/live', '/api/results', '/api/rankings',
+                      '/api/stats', '/api/search?q=colony', '/api/health']) {
+    const res = await call('GET', path, { now: Date.parse('2026-08-16T15:00:00Z') });
+    const body = JSON.stringify(res.body);
+    assert.ok(!body.includes('is_admin'), `${path} leaked the admin flag`);
+    assert.ok(!body.includes('Boss'), `${path} leaked an account name`);
+  }
 });
 
 test('a game that has kicked off leaves the board rather than lingering on it', async () => {
   const after = await call('GET', '/api/games', { now: Date.parse('2026-08-16T15:00:00Z') });
   assert.equal(after.body.games.length, 0, 'the board is what is still to come');
   assert.ok(!('recent' in after.body), 'and does not clutter itself with what is not');
-});
-
-test('a started game exposes who backed what; an upcoming one does not', async () => {
-  const { userId } = await account();
-  await placeBet(store, { userId, gameId: 1, side: 'home', stake: 500, clock: () => NOW });
-
-  const hidden = await call('GET', '/api/game/1');
-  assert.equal(hidden.body.revealed, false);
-  assert.equal(hidden.body.bets.length, 0);
-
-  const shown = await call('GET', '/api/game/1', { now: Date.parse('2026-08-16T15:00:00Z') });
-  assert.equal(shown.body.revealed, true);
-  assert.equal(shown.body.bets[0].display_name, 'Russ');
-  assert.equal(shown.body.bets[0].stake, 500);
 });
 
 // --- caching correctness ----------------------------------------------------
