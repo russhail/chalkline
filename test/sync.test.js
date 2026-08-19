@@ -1,7 +1,7 @@
 import { test, beforeEach } from 'node:test';
 import assert from 'node:assert/strict';
 import { createStore } from '../lib/store.js';
-import { sync, openGames, gameDays, getMeta } from '../lib/sync.js';
+import { sync, syncGameDetail, openGames, gameDays, getMeta } from '../lib/sync.js';
 import { placeBet } from '../lib/betting.js';
 
 let store;
@@ -377,5 +377,124 @@ test('a game already finished the first time we see it still settles and rates',
   assert.equal(Number(rows[1].played), 1);
   assert.ok(Number(rows[0].rating) > Number(rows[1].rating),
     'winning by six moves the winner above the loser');
+  store.close();
+});
+
+// --- the ingest must wait until a game is actually over ----------------------
+//
+// The standings file publishes the running score of a game in progress, and
+// syncGames writes it into home_score. Selecting detail on "has a score" meant
+// a game at 3-1 looked finished: the ingest fetched its file, wrote the four
+// goals played so far, and set detail_synced — after which the game is skipped
+// forever and the rest of it never arrives. Silent, permanent, and it applied
+// to every game the sync happened to catch mid-play.
+
+const liveThenFinal = () => {
+  const base = {
+    id: 800, homeTeamId: 1, awayTeamId: 2, homeLabel: null, awayLabel: null,
+    division: 'Open', poolName: 'Pool A', poolId: 1,
+    startsAt: '2026-08-18T10:00:00Z', valid: true,
+  };
+  return {
+    inProgress: { ...base, status: 'live', ongoing: true, homeScore: 3, awayScore: 1 },
+    finished: { ...base, status: 'final', ongoing: false, homeScore: 8, awayScore: 4 },
+  };
+};
+
+const detailWith = (n, id = 800) => ({
+  game_result: { game_id: id, hometeam: 1, visitorteam: 2, halftime: null },
+  gameevents: [{ time: 0, ishome: 1, type: 'offence' }],
+  goals: Array.from({ length: n }, (_, i) => ({
+    num: i, time: (i + 1) * 100, ishomegoal: i % 3 === 0 ? 0 : 1,
+    scorer: 10 + (i % 5), assist: 20 + (i % 4), iscallahan: 0,
+    scorerfirstname: 'S', scorerlastname: `${i % 5}`,
+    assistfirstname: 'A', assistlastname: `${i % 4}`,
+  })),
+});
+
+const twoTeams = [
+  { id: 1, name: 'Alpha', abbreviation: 'A', division: 'Open', country: 'IRL', seed: 1 },
+  { id: 2, name: 'Beta', abbreviation: 'B', division: 'Open', country: 'GBR', seed: 2 },
+];
+
+const seedGames = (store, games, version) => sync(store, {
+  force: true, now: Date.parse('2026-08-19T18:00:00Z'),
+  fetcher: async () => ({
+    heartbeat: { cacheVersion: version }, teams: twoTeams,
+    fieldSizes: { Open: 40 }, games,
+  }),
+});
+
+test('a game still being played is not ingested, however good its score looks', async () => {
+  const store = createStore({ backend: 'sqlite' });
+  await store.migrate();
+  const { inProgress } = liveThenFinal();
+  await seedGames(store, [inProgress], 'live1');
+
+  const res = await syncGameDetail(store, { fetcher: async () => detailWith(4) });
+  assert.equal(res.pending, 0, 'a live game is not a pending ingest');
+  const [{ n } = {}] = await store.query('SELECT COUNT(*) AS n FROM points WHERE game_id = 800');
+  assert.equal(Number(n), 0, 'nothing may be written from a game in progress');
+  const [g] = await store.query('SELECT detail_synced FROM games WHERE id = 800');
+  assert.ok(!g.detail_synced, 'and it must not be marked done');
+  store.close();
+});
+
+test('the same game ingests in full once it finishes', async () => {
+  const store = createStore({ backend: 'sqlite' });
+  await store.migrate();
+  const { inProgress, finished } = liveThenFinal();
+  await seedGames(store, [inProgress], 'live2');
+  await syncGameDetail(store, { fetcher: async () => detailWith(4) });
+
+  // The game ends 8-4. Under the old predicate this game was already flagged
+  // done at 3-1 and these twelve goals were lost for good.
+  await seedGames(store, [finished], 'final2');
+  const res = await syncGameDetail(store, { fetcher: async () => detailWith(12) });
+  assert.equal(res.ingested, 1);
+  const [{ n } = {}] = await store.query('SELECT COUNT(*) AS n FROM points WHERE game_id = 800');
+  assert.equal(Number(n), 12, 'every goal of the finished game');
+  store.close();
+});
+
+test('a file that does not yet account for the score is deferred, not written off', async () => {
+  const store = createStore({ backend: 'sqlite' });
+  await store.migrate();
+  const { finished } = liveThenFinal();
+  await seedGames(store, [finished], 'lag1');
+
+  // Status says final at 8-4, but the per-game file is still catching up and
+  // carries only nine goals. Marking it done here is exactly how the gap gets
+  // frozen in permanently.
+  const short = await syncGameDetail(store, { fetcher: async () => detailWith(9) });
+  assert.equal(short.ingested, 0);
+  assert.equal(short.deferred, 1, 'reported, not silently skipped');
+  const [mid] = await store.query('SELECT detail_synced FROM games WHERE id = 800');
+  assert.ok(!mid.detail_synced, 'left for the next tick');
+
+  // Next tick, the file has caught up. Self-healing, and the nine points
+  // already written are deduplicated by the insert.
+  const full = await syncGameDetail(store, { fetcher: async () => detailWith(12) });
+  assert.equal(full.ingested, 1);
+  assert.equal(full.deferred, 0);
+  const [{ n } = {}] = await store.query('SELECT COUNT(*) AS n FROM points WHERE game_id = 800');
+  assert.equal(Number(n), 12, 'no duplicates, no gap');
+  store.close();
+});
+
+test('a forfeit is exempt from the goal count, having never been played', async () => {
+  const store = createStore({ backend: 'sqlite' });
+  await store.migrate();
+  const { finished } = liveThenFinal();
+  await seedGames(store, [{ ...finished, homeScore: 15, awayScore: 0, forfeit: true }], 'ff1');
+
+  // Awarded, not played: the file has no goals and never will. Without the
+  // exemption this game would be retried on every tick until the tournament
+  // ended, and would sit in `deferred` looking like a fault.
+  const res = await syncGameDetail(store, { fetcher: async () => detailWith(0) });
+  assert.equal(res.deferred, 0);
+  assert.equal(res.ingested, 1);
+  const [g] = await store.query('SELECT detail_synced FROM games WHERE id = 800');
+  assert.ok(g.detail_synced);
   store.close();
 });
